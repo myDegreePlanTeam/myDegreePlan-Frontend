@@ -7238,7 +7238,10 @@
             "prerequisites": [
                 "MATH1910"
             ],
-            "subjectCode": "CSC"
+            "subjectCode": "CSC",
+            "corequisites": [
+                "MATH1910"
+            ]
         },
         {
             "code": "CSC1310",
@@ -18341,7 +18344,15 @@
                 "MATH1720",
                 "MATH1710"
             ],
-            "subjectCode": "MATH"
+            "subjectCode": "MATH",
+            "placementRequirements": [
+                {
+                    "type": "ACT",
+                    "subject": "Math",
+                    "minimumScore": 26,
+                    "description": "ACT Math score of 26 or higher, or completion of MATH1730"
+                }
+            ]
         },
         {
             "code": "MATH1911",

@@ -150,12 +150,20 @@ export function CourseTile({ slot, isOverlay = false }: Props) {
         </div>
 
         {/* Missing prereqs summary */}
-        {isInvalid && validity.missingPrereqs.length > 0 && (
-          <div className="mt-1.5 pt-1.5 border-t border-red-800 border-opacity-50">
-            <p className="text-[9px] text-red-400 leading-tight">
-              Missing: {validity.missingPrereqs.slice(0, 3).join(', ')}
-              {validity.missingPrereqs.length > 3 && ` +${validity.missingPrereqs.length - 3} more`}
-            </p>
+        {isInvalid && (validity.missingPrereqs.length > 0 || validity.missingCoreqs.length > 0) && (
+          <div className="mt-1.5 pt-1.5 border-t border-red-800 border-opacity-50 flex flex-col gap-0.5">
+            {validity.missingPrereqs.length > 0 && (
+              <p className="text-[9px] text-red-400 leading-tight">
+                Missing Prereq: {validity.missingPrereqs.slice(0, 3).join(', ')}
+                {validity.missingPrereqs.length > 3 && ` +${validity.missingPrereqs.length - 3}`}
+              </p>
+            )}
+            {validity.missingCoreqs.length > 0 && (
+              <p className="text-[9px] text-orange-400 leading-tight">
+                Missing Coreq: {validity.missingCoreqs.slice(0, 3).join(', ')}
+                {validity.missingCoreqs.length > 3 && ` +${validity.missingCoreqs.length - 3}`}
+              </p>
+            )}
           </div>
         )}
       </PrereqTooltip>

@@ -11,6 +11,8 @@ import React, { useState } from 'react';
 import { usePlanStore } from '../../store/planStore';
 import { CourseCatalog } from './CourseCatalog';
 import { UnscheduledPool } from './UnscheduledPool';
+import { TransferModal } from './TransferModal';
+import { PlacementModal } from './PlacementModal';
 import {
   planTotalCredits,
   completedSlotCount,
@@ -24,6 +26,9 @@ interface Props {
 export function Sidebar({ onSwitchDegree, onResetPlan }: Props) {
   const [collapsed, setCollapsed] = useState(false);
   const [activeTab, setActiveTab] = useState<'catalog' | 'unscheduled'>('catalog');
+  
+  const [isTransferModalOpen, setTransferModalOpen] = useState(false);
+  const [isPlacementModalOpen, setPlacementModalOpen] = useState(false);
 
   const selectedDegree = usePlanStore((s) => s.selectedDegree);
   const semesters = usePlanStore((s) => s.semesters);
@@ -136,6 +141,20 @@ export function Sidebar({ onSwitchDegree, onResetPlan }: Props) {
 
       {/* Bottom Actions */}
       <div className="p-3 border-t border-navy-600 border-opacity-40 space-y-2">
+        <div className="flex gap-2">
+          <button
+            onClick={() => setTransferModalOpen(true)}
+            className="flex-1 py-1.5 px-2 rounded-lg text-[10px] font-semibold tracking-wide uppercase text-accent-violet border border-navy-500 hover:border-accent-violet hover:bg-accent-violet/10 transition-colors"
+          >
+            + Transfer
+          </button>
+          <button
+            onClick={() => setPlacementModalOpen(true)}
+            className="flex-1 py-1.5 px-2 rounded-lg text-[10px] font-semibold tracking-wide uppercase text-accent-cyan border border-navy-500 hover:border-accent-cyan hover:bg-accent-cyan/10 transition-colors"
+          >
+            ACT Scores
+          </button>
+        </div>
         <button
           id="switch-degree-btn"
           onClick={onSwitchDegree}
@@ -151,6 +170,15 @@ export function Sidebar({ onSwitchDegree, onResetPlan }: Props) {
           Reset Plan
         </button>
       </div>
+
+      <TransferModal 
+        isOpen={isTransferModalOpen} 
+        onClose={() => setTransferModalOpen(false)} 
+      />
+      <PlacementModal 
+        isOpen={isPlacementModalOpen} 
+        onClose={() => setPlacementModalOpen(false)} 
+      />
     </div>
   );
 }

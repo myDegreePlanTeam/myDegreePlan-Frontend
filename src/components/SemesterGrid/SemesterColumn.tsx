@@ -43,36 +43,53 @@ export function SemesterColumn({ semesterIndex, slots }: Props) {
           ? 'border-accent-blue border-opacity-70 shadow-lg shadow-accent-blue/10 bg-navy-600'
           : 'border-navy-500 border-opacity-40 bg-navy-800 bg-opacity-60'
       }`}
-      style={{ minWidth: '200px' }}
+      style={{ minWidth: semesterIndex === 0 ? '220px' : '200px' }}
     >
       {/* Column Header */}
       <div className={`px-3 py-2.5 rounded-t-xl border-b border-opacity-30 ${
-        isSpring ? 'border-accent-cyan' : 'border-navy-500'
+        semesterIndex === 0 ? 'border-accent-violet' : isSpring ? 'border-accent-cyan' : 'border-navy-500'
       }`}>
         <div className="flex items-center justify-between">
           <div>
-            <p className="text-[9px] font-bold uppercase tracking-widest text-slate-500">{year}</p>
-            <h3 className={`text-sm font-bold ${isSpring ? 'text-accent-cyan' : 'text-slate-200'}`}>
-              {term}
-            </h3>
+            {semesterIndex === 0 ? (
+              <>
+                <p className="text-[9px] font-bold uppercase tracking-widest text-slate-500">Credits</p>
+                <h3 className="text-sm font-bold text-accent-violet">Transfer</h3>
+              </>
+            ) : (
+              <>
+                <p className="text-[9px] font-bold uppercase tracking-widest text-slate-500">{year}</p>
+                <h3 className={`text-sm font-bold ${isSpring ? 'text-accent-cyan' : 'text-slate-200'}`}>
+                  {term}
+                </h3>
+              </>
+            )}
           </div>
           {/* Credit counter */}
-          <div className={`text-right ${isOverCredit ? 'text-accent-rose' : 'text-slate-400'}`}>
-            <p className={`text-sm font-bold ${isOverCredit ? 'text-accent-rose animate-pulse-soft' : ''}`}>
+          <div className={`text-right ${isOverCredit && semesterIndex !== 0 ? 'text-accent-rose' : 'text-slate-400'}`}>
+            <p className={`text-sm font-bold ${isOverCredit && semesterIndex !== 0 ? 'text-accent-rose animate-pulse-soft' : ''}`}>
               {totalCredits}
             </p>
-            <p className="text-[9px] text-slate-500">/ {MAX_CREDITS} cr</p>
+            {semesterIndex !== 0 && (
+              <p className="text-[9px] text-slate-500">/ {MAX_CREDITS} cr</p>
+            )}
+            {semesterIndex === 0 && (
+              <p className="text-[9px] text-slate-500">earned</p>
+            )}
           </div>
         </div>
-        {/* Credit progress bar */}
-        <div className="mt-2 h-0.5 bg-navy-600 rounded-full overflow-hidden">
-          <div
-            className={`h-full rounded-full transition-all duration-300 ${
-              isOverCredit ? 'bg-accent-rose' : isSpring ? 'bg-accent-cyan' : 'bg-accent-blue'
-            }`}
-            style={{ width: `${Math.min(100, (totalCredits / MAX_CREDITS) * 100)}%` }}
-          />
-        </div>
+        
+        {/* Credit progress bar (only for regular semesters) */}
+        {semesterIndex !== 0 && (
+          <div className="mt-2 h-0.5 bg-navy-600 rounded-full overflow-hidden">
+            <div
+              className={`h-full rounded-full transition-all duration-300 ${
+                isOverCredit ? 'bg-accent-rose' : isSpring ? 'bg-accent-cyan' : 'bg-accent-blue'
+              }`}
+              style={{ width: `${Math.min(100, (totalCredits / MAX_CREDITS) * 100)}%` }}
+            />
+          </div>
+        )}
       </div>
 
       {/* Droppable Slot Area */}

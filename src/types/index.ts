@@ -38,6 +38,13 @@ export interface DegreePlan {
   classes: PlanEntry[];
 }
 
+export interface PlacementRequirement {
+  type: string;
+  subject: string;
+  minimumScore: number;
+  description: string;
+}
+
 /** A single course record from coursesFile.json */
 export interface Course {
   code: string;
@@ -48,6 +55,8 @@ export interface Course {
   description: string;
   /** Optional — treat missing as [] */
   prerequisites?: string[];
+  corequisites?: string[];
+  placementRequirements?: PlacementRequirement[];
 }
 
 /** Root shape of coursesFile.json */
@@ -94,10 +103,32 @@ export interface ValidityResult {
   valid: boolean;
   /** List of prerequisite course codes that are not satisfied */
   missingPrereqs: string[];
+  /** List of corequisite course codes that are not satisfied */
+  missingCoreqs: string[];
 }
 
 /** Map from slot.id → validity result, returned by the prerequisite engine */
 export type ValidityMap = Map<string, ValidityResult>;
+
+// ─── Placement & Transfer Types ───────────────────────────────────────────────
+
+export interface PlacementScores {
+  actMath?: number;
+  actEnglish?: number;
+  actReading?: number;
+  actScience?: number;
+  mathPlacementLevel?: number;
+  englishPlacementLevel?: number;
+}
+
+export interface TransferCourse {
+  code: string;
+  sourceInstitution: string;
+  originalCode: string;
+  credits: number;
+  grade: string;
+  equivalency?: string;
+}
 
 // ─── Application State ────────────────────────────────────────────────────────
 
@@ -109,12 +140,16 @@ export interface AppState {
   selectedDegree: string | null;
   /** The loaded degree plan for the selected degree */
   degreePlan: DegreePlan | null;
-  /** 8 semester columns — semesters[0] is Semester 1, etc. */
+  /** 9 semester columns — semesters[0] is Transfer, semesters[1] is Sem 1, etc. */
   semesters: Slot[][];
   /** Slots removed from the grid (fixed-plan courses not yet placed) */
   unscheduled: Slot[];
   /** Set of course codes the student has marked as completed (transfer credit, etc.) */
   completedCodes: Set<string>;
+  /** Placement test scores for satisfying placementRequirements */
+  placementScores: PlacementScores;
+  /** Manually entered transfer courses */
+  transferCourses: TransferCourse[];
   /** Prerequisite validity map, updated reactively after every plan mutation */
   validityMap: ValidityMap;
   /** O(1) lookup map built from coursesFile.json on startup */

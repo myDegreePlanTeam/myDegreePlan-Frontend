@@ -59,7 +59,10 @@ export function PrereqTooltip({ courseCode, validity, children }: Props) {
   if (!course) return <>{children}</>;
 
   const prereqs = course.prerequisites ?? [];
-  const missingSet = new Set(validity?.missingPrereqs ?? []);
+  const coreqs = course.corequisites ?? [];
+  const placements = course.placementRequirements ?? [];
+  const missingPrereqsSet = new Set(validity?.missingPrereqs ?? []);
+  const missingCoreqsSet = new Set(validity?.missingCoreqs ?? []);
 
   return (
     <div
@@ -96,19 +99,16 @@ export function PrereqTooltip({ courseCode, validity, children }: Props) {
 
           {/* Prerequisites */}
           {prereqs.length > 0 && (
-            <div>
+            <div className="mb-3">
               <p className="text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">
                 Prerequisites
               </p>
               <div className="space-y-1">
                 {prereqs.map((prereq) => {
-                  const isMissing = missingSet.has(prereq);
+                  const isMissing = missingPrereqsSet.has(prereq);
                   const prereqCourse = courseMap.get(prereq);
                   return (
-                    <div
-                      key={prereq}
-                      className="flex items-center gap-2 text-xs"
-                    >
+                    <div key={prereq} className="flex items-center gap-2 text-xs">
                       {isMissing ? (
                         <svg className="w-3.5 h-3.5 text-red-400 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
                           <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
@@ -120,9 +120,7 @@ export function PrereqTooltip({ courseCode, validity, children }: Props) {
                       )}
                       <span className={isMissing ? 'text-red-300' : 'text-emerald-300'}>
                         <span className="font-mono font-medium">{prereq}</span>
-                        {prereqCourse && (
-                          <span className="text-slate-400 ml-1">— {prereqCourse.name}</span>
-                        )}
+                        {prereqCourse && <span className="text-slate-400 ml-1">— {prereqCourse.name}</span>}
                       </span>
                     </div>
                   );
@@ -131,8 +129,61 @@ export function PrereqTooltip({ courseCode, validity, children }: Props) {
             </div>
           )}
 
-          {prereqs.length === 0 && (
-            <p className="text-xs text-slate-500 italic">No prerequisites required.</p>
+          {/* Corequisites */}
+          {coreqs.length > 0 && (
+            <div className="mb-3">
+              <p className="text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">
+                Corequisites (Concurrent or Before)
+              </p>
+              <div className="space-y-1">
+                {coreqs.map((coreq) => {
+                  const isMissing = missingCoreqsSet.has(coreq);
+                  const coreqCourse = courseMap.get(coreq);
+                  return (
+                    <div key={coreq} className="flex items-center gap-2 text-xs">
+                      {isMissing ? (
+                        <svg className="w-3.5 h-3.5 text-red-400 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                          <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+                        </svg>
+                      ) : (
+                        <svg className="w-3.5 h-3.5 text-emerald-400 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                          <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                        </svg>
+                      )}
+                      <span className={isMissing ? 'text-red-300' : 'text-emerald-300'}>
+                        <span className="font-mono font-medium">{coreq}</span>
+                        {coreqCourse && <span className="text-slate-400 ml-1">— {coreqCourse.name}</span>}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Placement Requirements */}
+          {placements.length > 0 && (
+            <div className="mb-3">
+              <p className="text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">
+                Placement Requirements
+              </p>
+              <div className="space-y-1">
+                {placements.map((req, idx) => (
+                  <div key={idx} className="flex gap-2 text-xs">
+                    <svg className="w-3.5 h-3.5 text-yellow-500 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    <span className="text-yellow-200/90 leading-tight">
+                      {req.description}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {prereqs.length === 0 && coreqs.length === 0 && placements.length === 0 && (
+            <p className="text-xs text-slate-500 italic">No prerequisites or corequisites required.</p>
           )}
         </div>
       )}

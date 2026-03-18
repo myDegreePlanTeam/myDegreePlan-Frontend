@@ -15,7 +15,7 @@
  * though they carry credit hours.
  */
 
-import type { Course, Slot, ValidityMap, ValidityResult } from '../types';
+import type { Course, Slot, ValidityMap, ValidityResult, PlacementScores } from '../types';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -40,20 +40,21 @@ function getEffectiveCode(slot: Slot): string | null {
 // ─── Main Engine ──────────────────────────────────────────────────────────────
 
 /**
- * Validate all course placements in the 8-semester plan against prerequisite rules.
+ * Validate all course placements in the 9-semester plan against prerequisite rules.
  *
- * @param semesters    - Array of 8 arrays of Slots (semesters[0] = Semester 1)
+ * @param semesters    - Array of 9 arrays of Slots (semesters[0] = Transfer)
  * @param completedCodes - Set of course codes the student has marked as completed
  * @param courseMap    - O(1) lookup map: code → Course from coursesFile.json
- * @returns ValidityMap — Map<slotId, { valid, missingPrereqs }>
+ * @param placementScores - Student placement scores
+ * @returns ValidityMap — Map<slotId, { valid, missingPrereqs, missingCoreqs }>
  *
  * Complexity: O(S × C × P) where S = semesters, C = courses/semester, P = prereqs/course.
- * With 8 semesters and realistic course counts this is very fast in practice.
  */
 export function validatePlan(
   semesters: Slot[][],
   completedCodes: Set<string>,
   courseMap: Map<string, Course>,
+  placementScores: PlacementScores,
 ): ValidityMap {
   const validityMap: ValidityMap = new Map<string, ValidityResult>();
 
@@ -67,6 +68,7 @@ export function validatePlan(
   // We build this incrementally: start with completedCodes, then add each
   // semester's effective codes before processing the next semester.
   const availableBefore: Set<string>[] = [];
+  const availableInOrBefore: Set<string>[] = [];
   let cumulativeCodes = new Set<string>(completedCodes);
 
   for (let semIndex = 0; semIndex < semesters.length; semIndex++) {
@@ -81,6 +83,9 @@ export function validatePlan(
         cumulativeCodes.add(code);
       }
     }
+    
+    // Snapshot what's available IN OR BEFORE this semester for corequisites
+    availableInOrBefore[semIndex] = new Set<string>(cumulativeCodes);
   }
 
   // Now validate each slot. For a slot in semester N (0-indexed),
@@ -93,22 +98,55 @@ export function validatePlan(
 
       // Unfilled options/elective slots: mark valid (no course to validate)
       if (effectiveCode === null) {
-        validityMap.set(slot.id, { valid: true, missingPrereqs: [] });
+        validityMap.set(slot.id, { valid: true, missingPrereqs: [], missingCoreqs: [] });
         continue;
       }
 
       // Look up the course record. If not found in catalog, treat as no prereqs.
       const courseRecord: Course | undefined = courseMap.get(effectiveCode);
       const prereqs: string[] = courseRecord?.prerequisites ?? [];
+      const coreqs: string[] = courseRecord?.corequisites ?? [];
+      const placements = courseRecord?.placementRequirements ?? [];
 
       // Determine which prerequisites are NOT satisfied
-      const missing: string[] = prereqs.filter(
-        (prereq) => !available.has(prereq),
-      );
+      // Handle the PC2500 aliasing for COMM2025 explicitly here
+      let missingPrereqs: string[] = prereqs.filter((prereq) => {
+        if (prereq === 'COMM2025' && available.has('PC2500')) return false;
+        return !available.has(prereq);
+      });
+
+      // Check placement scores. If a placement requirement is present and met,
+      // it satisfies ALL prerequisites for that course (e.g. ACT Math 26 satisfies MATH1730).
+      let hasValidPlacement = false;
+      for (const p of placements) {
+        if (p.type === 'ACT' && p.subject === 'Math' && placementScores.actMath && placementScores.actMath >= p.minimumScore) {
+          hasValidPlacement = true;
+          break;
+        }
+        if (p.type === 'ACT' && p.subject === 'English' && placementScores.actEnglish && placementScores.actEnglish >= p.minimumScore) {
+          hasValidPlacement = true;
+          break;
+        }
+        // Add more placement logic as needed
+      }
+
+      if (hasValidPlacement) {
+        // Only ignore 'missing' if the placement strictly overrides it.
+        // For our MVP, meeting *any* placement requirement bypasses the missing prerequisite list 
+        // because typical TTU course structure relies on "ACT Math 26 OR MATH 1730".
+        missingPrereqs = [];
+      }
+
+      // Determine which corequisites are NOT satisfied
+      const missingCoreqs: string[] = coreqs.filter((coreq) => {
+        if (coreq === 'COMM2025' && availableInOrBefore[semIndex].has('PC2500')) return false;
+        return !availableInOrBefore[semIndex].has(coreq);
+      });
 
       validityMap.set(slot.id, {
-        valid: missing.length === 0,
-        missingPrereqs: missing,
+        valid: missingPrereqs.length === 0 && missingCoreqs.length === 0,
+        missingPrereqs,
+        missingCoreqs
       });
     }
   }

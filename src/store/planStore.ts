@@ -19,6 +19,8 @@ import type {
   Course,
   DegreeEntry,
   DegreePlan,
+  PlacementScores,
+  TransferCourse,
   Slot,
   ValidityMap,
 } from '../types';
@@ -32,9 +34,9 @@ import { validatePlan } from '../services/prerequisiteEngine';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-/** Build the initial 8 empty semester columns. */
+/** Build the initial 9 empty semester columns where [0] is Transfer */
 function buildEmptySemesters(): Slot[][] {
-  return Array.from({ length: 8 }, () => []);
+  return Array.from({ length: 9 }, () => []);
 }
 
 /**
@@ -45,8 +47,8 @@ function planToSlots(plan: DegreePlan): Slot[][] {
   const semesters = buildEmptySemesters();
 
   for (const entry of plan.classes) {
-    const semIndex = entry.semester - 1; // convert to 0-indexed
-    if (semIndex < 0 || semIndex > 7) continue; // guard against malformed data
+    const semIndex = entry.semester; // 1-indexed to map to semesters[1-8]
+    if (semIndex < 1 || semIndex > 8) continue; // guard against malformed data
 
     let slot: Slot;
 
@@ -84,13 +86,13 @@ function planToSlots(plan: DegreePlan): Slot[][] {
   return semesters;
 }
 
-/** Run the prerequisite engine and return a fresh ValidityMap. */
 function revalidate(
   semesters: Slot[][],
   completedCodes: Set<string>,
   courseMap: Map<string, Course>,
+  placementScores: PlacementScores,
 ): ValidityMap {
-  return validatePlan(semesters, completedCodes, courseMap);
+  return validatePlan(semesters, completedCodes, courseMap, placementScores);
 }
 
 // ─── Store Definition ─────────────────────────────────────────────────────────
@@ -129,6 +131,12 @@ interface PlanActions {
   /** Remove a fixed course from a semester back to the unscheduled pool. */
   removeFromSemester: (slotId: string) => void;
 
+  /** Add a manual transfer course to Semester 0 */
+  addTransferCourse: (course: TransferCourse) => void;
+
+  /** Update placement scores (ACT, etc.) */
+  setPlacementScores: (scores: PlacementScores) => void;
+
   /** Add a course from the catalog into a specific semester. */
   addCourseToSemester: (courseCode: string, semesterIndex: number) => void;
 
@@ -152,17 +160,19 @@ type FullStore = AppState & PlanActions;
 // Zustand store — we persist only the plan-state portions, not the catalog.
 export const usePlanStore = create<FullStore>()(
   persist(
-    (set, get) => ({
+    (set: any, get: () => FullStore): FullStore => ({
       // ── Initial State ────────────────────────────────────────────────────
-      degrees: [],
+      degrees: [] as DegreeEntry[],
       selectedDegree: null,
       degreePlan: null,
       semesters: buildEmptySemesters(),
-      unscheduled: [],
+      unscheduled: [] as Slot[],
       completedCodes: new Set<string>(),
-      validityMap: new Map(),
-      courseMap: new Map(),
-      subjectCodes: [],
+      placementScores: {} as PlacementScores,
+      transferCourses: [] as TransferCourse[],
+      validityMap: new Map() as ValidityMap,
+      courseMap: new Map<string, Course>(),
+      subjectCodes: [] as string[],
       loaded: false,
       loadError: null,
 
@@ -175,13 +185,13 @@ export const usePlanStore = create<FullStore>()(
             loadCourseMap(),
             loadSubjectCodes(),
           ]);
-          set((state) => ({
+          set((state: FullStore) => ({
             degrees: degreesFile.degrees,
             courseMap,
             subjectCodes,
             loaded: true,
             // Re-validate with freshly loaded courseMap in case we restored from localStorage
-            validityMap: revalidate(state.semesters, state.completedCodes, courseMap),
+            validityMap: revalidate(state.semesters, state.completedCodes, courseMap, state.placementScores),
           }));
         } catch (err) {
           set({ loadError: String(err), loaded: true });
@@ -193,8 +203,8 @@ export const usePlanStore = create<FullStore>()(
           const plan = await loadDegreePlan(degree.planFile);
           const semesters = planToSlots(plan);
           const completedCodes = new Set<string>();
-          const { courseMap } = get();
-          const validityMap = revalidate(semesters, completedCodes, courseMap);
+          const { courseMap, placementScores } = get();
+          const validityMap = revalidate(semesters, completedCodes, courseMap, placementScores);
           set({
             selectedDegree: degree.degreeName,
             degreePlan: plan,
@@ -258,7 +268,7 @@ export const usePlanStore = create<FullStore>()(
           dest.splice(clampedPos, 0, slot);
         }
 
-        const validityMap = revalidate(newSemesters, completedCodes, courseMap);
+        const validityMap = revalidate(newSemesters, completedCodes, courseMap, get().placementScores);
         set({ semesters: newSemesters, unscheduled: newUnscheduled, validityMap });
       },
 
@@ -288,7 +298,7 @@ export const usePlanStore = create<FullStore>()(
           }),
         );
 
-        const validityMap = revalidate(newSemesters, newCompletedCodes, courseMap);
+        const validityMap = revalidate(newSemesters, newCompletedCodes, courseMap, get().placementScores);
         set({ semesters: newSemesters, completedCodes: newCompletedCodes, validityMap });
       },
 
@@ -301,7 +311,7 @@ export const usePlanStore = create<FullStore>()(
               : slot,
           ),
         );
-        const validityMap = revalidate(newSemesters, completedCodes, courseMap);
+        const validityMap = revalidate(newSemesters, completedCodes, courseMap, get().placementScores);
         set({ semesters: newSemesters, validityMap });
       },
 
@@ -323,7 +333,7 @@ export const usePlanStore = create<FullStore>()(
             }
           }
         }
-        const validityMap = revalidate(newSemesters, newCompletedCodes, courseMap);
+        const validityMap = revalidate(newSemesters, newCompletedCodes, courseMap, get().placementScores);
         set({ semesters: newSemesters, completedCodes: newCompletedCodes, validityMap });
       },
 
@@ -336,7 +346,7 @@ export const usePlanStore = create<FullStore>()(
               : slot,
           ),
         );
-        const validityMap = revalidate(newSemesters, completedCodes, courseMap);
+        const validityMap = revalidate(newSemesters, completedCodes, courseMap, get().placementScores);
         set({ semesters: newSemesters, validityMap });
       },
 
@@ -357,7 +367,7 @@ export const usePlanStore = create<FullStore>()(
             }
           }
         }
-        const validityMap = revalidate(newSemesters, newCompletedCodes, courseMap);
+        const validityMap = revalidate(newSemesters, newCompletedCodes, courseMap, get().placementScores);
         set({ semesters: newSemesters, completedCodes: newCompletedCodes, validityMap });
       },
 
@@ -393,7 +403,7 @@ export const usePlanStore = create<FullStore>()(
             ? [...unscheduled, resetSlot] // fixed courses go to unscheduled pool
             : unscheduled; // options/elective slots simply disappear
 
-        const validityMap = revalidate(newSemesters, newCompletedCodes, courseMap);
+        const validityMap = revalidate(newSemesters, newCompletedCodes, courseMap, get().placementScores);
         set({
           semesters: newSemesters,
           unscheduled: newUnscheduled,
@@ -449,7 +459,7 @@ export const usePlanStore = create<FullStore>()(
           }
         }
 
-        const validityMap = revalidate(newSemesters, completedCodes, courseMap);
+        const validityMap = revalidate(newSemesters, completedCodes, courseMap, get().placementScores);
         set({ semesters: newSemesters, unscheduled: newUnscheduled, validityMap });
       },
 
@@ -462,8 +472,8 @@ export const usePlanStore = create<FullStore>()(
           const plan = await loadDegreePlan(entry.planFile);
           const semesters = planToSlots(plan);
           const completedCodes = new Set<string>();
-          const { courseMap } = get();
-          const validityMap = revalidate(semesters, completedCodes, courseMap);
+          const { courseMap, placementScores } = get();
+          const validityMap = revalidate(semesters, completedCodes, courseMap, placementScores);
           set({ degreePlan: plan, semesters, unscheduled: [], completedCodes, validityMap });
         } catch (err) {
           set({ loadError: String(err) });
@@ -471,9 +481,41 @@ export const usePlanStore = create<FullStore>()(
       },
 
       rerunValidation: () => {
-        const { semesters, completedCodes, courseMap } = get();
-        const validityMap = revalidate(semesters, completedCodes, courseMap);
+        const { semesters, completedCodes, courseMap, placementScores } = get();
+        const validityMap = revalidate(semesters, completedCodes, courseMap, placementScores);
         set({ validityMap });
+      },
+
+      addTransferCourse: (course: TransferCourse) => {
+        const { semesters, completedCodes, courseMap, placementScores, transferCourses } = get();
+        
+        // Add to transferCourses array
+        const newTransferCourses = [...transferCourses, course];
+        
+        // Also add a 'fixed' slot to Sem 0 (which acts as the Transfer column)
+        const id = uuidv4();
+        const newSlot: Slot = {
+          id,
+          type: 'fixed',
+          courseCode: course.equivalency || course.code,
+          completed: true, // Transfer courses are implicitly completed
+        };
+        
+        const newSemesters = semesters.map((sem, idx) => 
+          idx === 0 ? [...sem, newSlot] : [...sem]
+        );
+        
+        const newCompletedCodes = new Set<string>(completedCodes);
+        newCompletedCodes.add(newSlot.courseCode!);
+
+        const validityMap = revalidate(newSemesters, newCompletedCodes, courseMap, placementScores);
+        set({ semesters: newSemesters, transferCourses: newTransferCourses, completedCodes: newCompletedCodes, validityMap });
+      },
+
+      setPlacementScores: (scores: PlacementScores) => {
+        const { semesters, completedCodes, courseMap } = get();
+        const validityMap = revalidate(semesters, completedCodes, courseMap, scores);
+        set({ placementScores: scores, validityMap });
       },
     }),
     {
@@ -495,12 +537,14 @@ export const usePlanStore = create<FullStore>()(
         },
       }),
       // Only persist plan state — not the heavyweight catalog data
-      partialize: (state) => ({
+      partialize: (state: any) => ({
         selectedDegree: state.selectedDegree,
         degreePlan: state.degreePlan,
         semesters: state.semesters,
         unscheduled: state.unscheduled,
         completedCodes: state.completedCodes,
+        placementScores: state.placementScores,
+        transferCourses: state.transferCourses,
       }),
     },
   ),
