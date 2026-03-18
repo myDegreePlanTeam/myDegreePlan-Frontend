@@ -1,0 +1,287 @@
+{
+    "hours": 120,
+    "classes": [
+        {
+            "classCode": "CSC1020",
+            "semester": 1
+        },
+        {
+            "classCode": "CSC1300",
+            "semester": 1
+        },
+        {
+            "classCode": "MATH1910",
+            "semester": 1
+        },
+        {
+            "classCode": "ENGL1010",
+            "semester": 1
+        },
+        {
+            "classCode": "HIST2010",
+            "semester": 1
+        },
+        {
+            "classCode": "CSC1310",
+            "semester": 2
+        },
+        {
+            "classCode": "MATH1920",
+            "semester": 2
+        },
+        {
+            "classCode": "ENGL1020",
+            "semester": 2
+        },
+        {
+            "classCode": "HIST2020",
+            "semester": 2
+        },
+        {
+            "classCode": "options",
+            "semester": 2,
+            "optionsName": "Social/Behavioral Science Elective",
+            "credits": 3,
+            "options": [
+                "AGBE2010",
+                "ANTH1100",
+                "ECON2010",
+                "ECON2020",
+                "ESS1100",
+                "EXPW2015",
+                "GEOG1012",
+                "GEOG1130",
+                "JOUR1110",
+                "POLS1030",
+                "PSY1030",
+                "SOC1010",
+                "WGS2010"
+            ]
+        },
+        {
+            "classCode": "CSC2310",
+            "semester": 3
+        },
+        {
+            "classCode": "CSC2510",
+            "semester": 3
+        },
+        {
+            "classCode": "CSC2700",
+            "semester": 3
+        },
+        {
+            "classCode": "options",
+            "semester": 3,
+            "optionsName": "Science Sequence",
+            "credits": 4,
+            "options": [
+                "BIOL1113",
+                "BIOL1123",
+                "BIOL2310",
+                "CHEM1110",
+                "CHEM1120",
+                "GEOL1040",
+                "GEOL1045",
+                "PHYS2010",
+                "PHYS2020",
+                "PHYS2110",
+                "PHYS2120"
+            ]
+        },
+        {
+            "classCode": "options",
+            "semester": 3,
+            "optionsName": "Communications",
+            "credits": 3,
+            "options": [
+                "COMM2025",
+                "PC2500"
+            ]
+        },
+        {
+            "classCode": "CSC2220",
+            "semester": 4
+        },
+        {
+            "classCode": "CSC2400",
+            "semester": 4
+        },
+        {
+            "classCode": "options",
+            "semester": 4,
+            "optionsName": "Statistics",
+            "credits": 3,
+            "options": [
+                "MATH3070",
+                "MATH3470"
+            ]
+        },
+        {
+            "classCode": "options",
+            "semester": 4,
+            "optionsName": "Science Sequence",
+            "credits": 4,
+            "options": [
+                "BIOL1113",
+                "BIOL1123",
+                "BIOL2310",
+                "CHEM1110",
+                "CHEM1120",
+                "GEOL1040",
+                "GEOL1045",
+                "PHYS2010",
+                "PHYS2020",
+                "PHYS2110",
+                "PHYS2120"
+            ]
+        },
+        {
+            "classCode": "options",
+            "semester": 4,
+            "optionsName": "English Literature",
+            "credits": 3,
+            "options": [
+                "ENGL2130",
+                "ENGL2235",
+                "ENGL2330"
+            ]
+        },
+        {
+            "classCode": "CSC3220",
+            "semester": 5
+        },
+        {
+            "classCode": "CSC3300",
+            "semester": 5
+        },
+        {
+            "classCode": "CSC3410",
+            "semester": 5
+        },
+        {
+            "classCode": "MATH2010",
+            "semester": 5
+        },
+        {
+            "classCode": "options",
+            "semester": 5,
+            "optionsName": "Humanities/Fine Arts Elective",
+            "credits": 3,
+            "options": [
+                "ART1035",
+                "ART2000",
+                "ART2020",
+                "FLST2520",
+                "FLST3520",
+                "FREN2510",
+                "GERM2520",
+                "HIST2210",
+                "HIST2220",
+                "HIST2310",
+                "HIST2320",
+                "HIST1310",
+                "MUS1030",
+                "PHIL1030",
+                "PHIL2250",
+                "RELS2010",
+                "SPAN2510",
+                "SPAN2550",
+                "THEA1030"
+            ]
+        },
+        {
+            "classCode": "CSC3040",
+            "semester": 6
+        },
+        {
+            "classCode": "CSC3710",
+            "semester": 6
+        },
+        {
+            "classCode": "CSC4220",
+            "semester": 6
+        },
+        {
+            "classCode": "CSC4320",
+            "semester": 6
+        },
+        {
+            "classCode": "options",
+            "semester": 6,
+            "optionsName": "Humanities/Fine Arts Elective",
+            "credits": 3,
+            "options": [
+                "ART1035",
+                "ART2000",
+                "ART2020",
+                "FLST2520",
+                "FLST3520",
+                "FREN2510",
+                "GERM2520",
+                "HIST2210",
+                "HIST2220",
+                "HIST2310",
+                "HIST2320",
+                "HIST1310",
+                "MUS1030",
+                "PHIL1030",
+                "PHIL2250",
+                "RELS2010",
+                "SPAN2510",
+                "SPAN2550",
+                "THEA1030"
+            ]
+        },
+        {
+            "classCode": "CSC4100",
+            "semester": 7
+        },
+        {
+            "classCode": "CSC4240",
+            "semester": 7
+        },
+        {
+            "classCode": "CSC4610",
+            "semester": 7
+        },
+        {
+            "classCode": "options",
+            "semester": 7,
+            "optionsName": "Social/Behavioral Science Elective",
+            "credits": 3,
+            "options": [
+                "AGBE2010",
+                "ANTH1100",
+                "ECON2010",
+                "ECON2020",
+                "ESS1100",
+                "EXPW2015",
+                "GEOG1012",
+                "GEOG1130",
+                "JOUR1110",
+                "POLS1030",
+                "PSY1030",
+                "SOC1010",
+                "WGS2010"
+            ]
+        },
+        {
+            "classCode": "CSC4200",
+            "semester": 8
+        },
+        {
+            "classCode": "CSC4260",
+            "semester": 8
+        },
+        {
+            "classCode": "CSC4615",
+            "semester": 8
+        },
+        {
+            "classCode": "elective",
+            "semester": 8,
+            "credits": 5
+        }
+        ]
+}

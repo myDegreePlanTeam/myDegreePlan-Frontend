@@ -1,0 +1,16 @@
+{
+    "degrees": [
+        {
+            "degreeName": "Computer Science: No Concentration"
+        },
+        {
+            "degreeName": "Computer Science: Data Science and Artifical Intelligence Concentration"
+        },
+        {
+            "degreeName": "Computer Science: Cybersecurity Concentration"
+        },
+        {
+            "degreeName": "Computer Science: High Performance Computing Concentration"
+        }
+    ]
+}

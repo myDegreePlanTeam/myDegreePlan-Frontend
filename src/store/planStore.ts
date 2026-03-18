@@ -1,0 +1,507 @@
+/**
+ * planStore.ts
+ * Global application state managed by Zustand.
+ *
+ * State is persisted to localStorage automatically via the `persist` middleware.
+ * The course catalog (courseMap, subjectCodes, degrees) is NOT persisted —
+ * it is always reloaded fresh from JSON on startup, keeping localStorage lean.
+ *
+ * Any time the plan changes (drag, add, remove, complete toggle, choice fill),
+ * the store immediately re-runs `validatePlan` so the UI reflects the new
+ * validity state without any manual trigger.
+ */
+
+import { create } from 'zustand';
+import { persist, createJSONStorage } from 'zustand/middleware';
+import { v4 as uuidv4 } from './uuid';
+import type {
+  AppState,
+  Course,
+  DegreeEntry,
+  DegreePlan,
+  Slot,
+  ValidityMap,
+} from '../types';
+import {
+  loadCourseMap,
+  loadDegrees,
+  loadDegreePlan,
+  loadSubjectCodes,
+} from '../services/dataLoader';
+import { validatePlan } from '../services/prerequisiteEngine';
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+/** Build the initial 8 empty semester columns. */
+function buildEmptySemesters(): Slot[][] {
+  return Array.from({ length: 8 }, () => []);
+}
+
+/**
+ * Convert a DegreePlan's class entries into 8 semester Slot arrays.
+ * Assigns stable UUIDs to each slot for dnd-kit key stability.
+ */
+function planToSlots(plan: DegreePlan): Slot[][] {
+  const semesters = buildEmptySemesters();
+
+  for (const entry of plan.classes) {
+    const semIndex = entry.semester - 1; // convert to 0-indexed
+    if (semIndex < 0 || semIndex > 7) continue; // guard against malformed data
+
+    let slot: Slot;
+
+    if (entry.classCode === 'options') {
+      slot = {
+        id: uuidv4(),
+        type: 'options',
+        optionsName: entry.optionsName ?? 'Choose an Option',
+        options: entry.options ?? [],
+        selectedOption: null,
+        slotCredits: entry.credits ?? 3,
+        completed: false,
+      };
+    } else if (entry.classCode === 'elective') {
+      slot = {
+        id: uuidv4(),
+        type: 'elective',
+        slotCredits: entry.credits ?? 3,
+        electiveCode: null,
+        completed: false,
+      };
+    } else {
+      // Fixed course
+      slot = {
+        id: uuidv4(),
+        type: 'fixed',
+        courseCode: entry.classCode,
+        completed: false,
+      };
+    }
+
+    semesters[semIndex].push(slot);
+  }
+
+  return semesters;
+}
+
+/** Run the prerequisite engine and return a fresh ValidityMap. */
+function revalidate(
+  semesters: Slot[][],
+  completedCodes: Set<string>,
+  courseMap: Map<string, Course>,
+): ValidityMap {
+  return validatePlan(semesters, completedCodes, courseMap);
+}
+
+// ─── Store Definition ─────────────────────────────────────────────────────────
+
+interface PlanActions {
+  /** Load all JSON data on app startup. */
+  loadData: () => Promise<void>;
+
+  /**
+   * Select a degree and populate the semester grid with the recommended sequence.
+   * If `confirmClear` is false AND a plan is already loaded, the caller should
+   * prompt the user for confirmation before calling this.
+   */
+  selectDegree: (degree: DegreeEntry) => Promise<void>;
+
+  /** Move a slot from one location to another.
+   *  Locations are identified by: { type: 'semester' | 'unscheduled', semesterIndex?: number, slotIndex?: number }
+   */
+  moveSlot: (params: MoveParams) => void;
+
+  /** Toggle the "completed" flag on a slot and re-run validation. */
+  toggleCompleted: (slotId: string) => void;
+
+  /** Fill a choice-group slot with the selected option code. */
+  fillChoice: (slotId: string, courseCode: string) => void;
+
+  /** Clear a filled choice-group slot back to unfilled. */
+  clearChoice: (slotId: string) => void;
+
+  /** Fill an elective slot with a dragged-in course code. */
+  fillElective: (slotId: string, courseCode: string) => void;
+
+  /** Clear a filled elective slot. */
+  clearElective: (slotId: string) => void;
+
+  /** Remove a fixed course from a semester back to the unscheduled pool. */
+  removeFromSemester: (slotId: string) => void;
+
+  /** Add a course from the catalog into a specific semester. */
+  addCourseToSemester: (courseCode: string, semesterIndex: number) => void;
+
+  /** Reset the plan to the recommended sequence for the current degree. */
+  resetPlan: () => Promise<void>;
+
+  /** Manually re-run validation (used after bulk state changes). */
+  rerunValidation: () => void;
+}
+
+export interface MoveParams {
+  slotId: string;
+  /** Destination: 0-indexed semester number, or -1 for unscheduled pool */
+  toSemesterIndex: number;
+  /** Position within the destination container */
+  toPosition: number;
+}
+
+type FullStore = AppState & PlanActions;
+
+// Zustand store — we persist only the plan-state portions, not the catalog.
+export const usePlanStore = create<FullStore>()(
+  persist(
+    (set, get) => ({
+      // ── Initial State ────────────────────────────────────────────────────
+      degrees: [],
+      selectedDegree: null,
+      degreePlan: null,
+      semesters: buildEmptySemesters(),
+      unscheduled: [],
+      completedCodes: new Set<string>(),
+      validityMap: new Map(),
+      courseMap: new Map(),
+      subjectCodes: [],
+      loaded: false,
+      loadError: null,
+
+      // ── Actions ──────────────────────────────────────────────────────────
+
+      loadData: async () => {
+        try {
+          const [degreesFile, courseMap, subjectCodes] = await Promise.all([
+            loadDegrees(),
+            loadCourseMap(),
+            loadSubjectCodes(),
+          ]);
+          set((state) => ({
+            degrees: degreesFile.degrees,
+            courseMap,
+            subjectCodes,
+            loaded: true,
+            // Re-validate with freshly loaded courseMap in case we restored from localStorage
+            validityMap: revalidate(state.semesters, state.completedCodes, courseMap),
+          }));
+        } catch (err) {
+          set({ loadError: String(err), loaded: true });
+        }
+      },
+
+      selectDegree: async (degree: DegreeEntry) => {
+        try {
+          const plan = await loadDegreePlan(degree.planFile);
+          const semesters = planToSlots(plan);
+          const completedCodes = new Set<string>();
+          const { courseMap } = get();
+          const validityMap = revalidate(semesters, completedCodes, courseMap);
+          set({
+            selectedDegree: degree.degreeName,
+            degreePlan: plan,
+            semesters,
+            unscheduled: [],
+            completedCodes,
+            validityMap,
+          });
+        } catch (err) {
+          set({ loadError: String(err) });
+        }
+      },
+
+      moveSlot: ({ slotId, toSemesterIndex, toPosition }: MoveParams) => {
+        const { semesters, unscheduled, completedCodes, courseMap } = get();
+
+        // Find the slot in its current location
+        let slot: Slot | undefined;
+        let fromSemesterIndex = -2; // -2 = not found, -1 = unscheduled
+        let fromPosition = -1;
+
+        // Search unscheduled pool first
+        const unschedIdx = unscheduled.findIndex((s) => s.id === slotId);
+        if (unschedIdx !== -1) {
+          slot = unscheduled[unschedIdx];
+          fromSemesterIndex = -1;
+          fromPosition = unschedIdx;
+        } else {
+          // Search each semester
+          for (let i = 0; i < semesters.length; i++) {
+            const idx = semesters[i].findIndex((s) => s.id === slotId);
+            if (idx !== -1) {
+              slot = semesters[i][idx];
+              fromSemesterIndex = i;
+              fromPosition = idx;
+              break;
+            }
+          }
+        }
+
+        if (!slot) return; // slot not found — no-op
+
+        // Build new state arrays via immutable clones
+        const newSemesters = semesters.map((sem) => [...sem]);
+        let newUnscheduled = [...unscheduled];
+
+        // Remove from source
+        if (fromSemesterIndex === -1) {
+          newUnscheduled.splice(fromPosition, 1);
+        } else {
+          newSemesters[fromSemesterIndex].splice(fromPosition, 1);
+        }
+
+        // Insert into destination
+        if (toSemesterIndex === -1) {
+          // Moving to unscheduled pool
+          newUnscheduled.splice(toPosition, 0, slot);
+        } else {
+          const dest = newSemesters[toSemesterIndex];
+          const clampedPos = Math.min(toPosition, dest.length);
+          dest.splice(clampedPos, 0, slot);
+        }
+
+        const validityMap = revalidate(newSemesters, completedCodes, courseMap);
+        set({ semesters: newSemesters, unscheduled: newUnscheduled, validityMap });
+      },
+
+      toggleCompleted: (slotId: string) => {
+        const { semesters, completedCodes, courseMap } = get();
+
+        let newCompletedCodes = new Set<string>(completedCodes);
+        const newSemesters = semesters.map((sem) =>
+          sem.map((slot) => {
+            if (slot.id !== slotId) return slot;
+
+            const updatedSlot = { ...slot, completed: !slot.completed };
+            // Determine the effective course code to add/remove from completedCodes
+            let code: string | null = null;
+            if (slot.type === 'fixed') code = slot.courseCode ?? null;
+            else if (slot.type === 'options') code = slot.selectedOption ?? null;
+            else if (slot.type === 'elective') code = slot.electiveCode ?? null;
+
+            if (code) {
+              if (updatedSlot.completed) {
+                newCompletedCodes.add(code);
+              } else {
+                newCompletedCodes.delete(code);
+              }
+            }
+            return updatedSlot;
+          }),
+        );
+
+        const validityMap = revalidate(newSemesters, newCompletedCodes, courseMap);
+        set({ semesters: newSemesters, completedCodes: newCompletedCodes, validityMap });
+      },
+
+      fillChoice: (slotId: string, courseCode: string) => {
+        const { semesters, completedCodes, courseMap } = get();
+        const newSemesters = semesters.map((sem) =>
+          sem.map((slot) =>
+            slot.id === slotId && slot.type === 'options'
+              ? { ...slot, selectedOption: courseCode }
+              : slot,
+          ),
+        );
+        const validityMap = revalidate(newSemesters, completedCodes, courseMap);
+        set({ semesters: newSemesters, validityMap });
+      },
+
+      clearChoice: (slotId: string) => {
+        const { semesters, completedCodes, courseMap } = get();
+        const newSemesters = semesters.map((sem) =>
+          sem.map((slot) =>
+            slot.id === slotId && slot.type === 'options'
+              ? { ...slot, selectedOption: null, completed: false }
+              : slot,
+          ),
+        );
+        // If the cleared slot's code was in completedCodes, remove it
+        const newCompletedCodes = new Set<string>(completedCodes);
+        for (const sem of semesters) {
+          for (const slot of sem) {
+            if (slot.id === slotId && slot.type === 'options' && slot.selectedOption) {
+              newCompletedCodes.delete(slot.selectedOption);
+            }
+          }
+        }
+        const validityMap = revalidate(newSemesters, newCompletedCodes, courseMap);
+        set({ semesters: newSemesters, completedCodes: newCompletedCodes, validityMap });
+      },
+
+      fillElective: (slotId: string, courseCode: string) => {
+        const { semesters, completedCodes, courseMap } = get();
+        const newSemesters = semesters.map((sem) =>
+          sem.map((slot) =>
+            slot.id === slotId && slot.type === 'elective'
+              ? { ...slot, electiveCode: courseCode }
+              : slot,
+          ),
+        );
+        const validityMap = revalidate(newSemesters, completedCodes, courseMap);
+        set({ semesters: newSemesters, validityMap });
+      },
+
+      clearElective: (slotId: string) => {
+        const { semesters, completedCodes, courseMap } = get();
+        const newSemesters = semesters.map((sem) =>
+          sem.map((slot) =>
+            slot.id === slotId && slot.type === 'elective'
+              ? { ...slot, electiveCode: null, completed: false }
+              : slot,
+          ),
+        );
+        const newCompletedCodes = new Set<string>(completedCodes);
+        for (const sem of semesters) {
+          for (const slot of sem) {
+            if (slot.id === slotId && slot.type === 'elective' && slot.electiveCode) {
+              newCompletedCodes.delete(slot.electiveCode);
+            }
+          }
+        }
+        const validityMap = revalidate(newSemesters, newCompletedCodes, courseMap);
+        set({ semesters: newSemesters, completedCodes: newCompletedCodes, validityMap });
+      },
+
+      removeFromSemester: (slotId: string) => {
+        const { semesters, unscheduled, completedCodes, courseMap } = get();
+        let removedSlot: Slot | undefined;
+
+        const newSemesters = semesters.map((sem) =>
+          sem.filter((slot) => {
+            if (slot.id === slotId) {
+              removedSlot = slot;
+              return false;
+            }
+            return true;
+          }),
+        );
+
+        if (!removedSlot) return;
+
+        // Remove from completedCodes if applicable
+        const newCompletedCodes = new Set<string>(completedCodes);
+        let effectiveCode: string | undefined;
+        if (removedSlot.type === 'fixed') effectiveCode = removedSlot.courseCode;
+        else if (removedSlot.type === 'options') effectiveCode = removedSlot.selectedOption ?? undefined;
+        else if (removedSlot.type === 'elective') effectiveCode = removedSlot.electiveCode ?? undefined;
+        if (effectiveCode) newCompletedCodes.delete(effectiveCode);
+
+        // Reset completion state on the removed slot
+        const resetSlot: Slot = { ...removedSlot, completed: false };
+
+        const newUnscheduled =
+          removedSlot.type === 'fixed'
+            ? [...unscheduled, resetSlot] // fixed courses go to unscheduled pool
+            : unscheduled; // options/elective slots simply disappear
+
+        const validityMap = revalidate(newSemesters, newCompletedCodes, courseMap);
+        set({
+          semesters: newSemesters,
+          unscheduled: newUnscheduled,
+          completedCodes: newCompletedCodes,
+          validityMap,
+        });
+      },
+
+      addCourseToSemester: (courseCode: string, semesterIndex: number) => {
+        const { semesters, unscheduled, completedCodes, courseMap } = get();
+
+        // Check if the course is in the unscheduled pool first
+        const unschedIdx = unscheduled.findIndex(
+          (s) => s.type === 'fixed' && s.courseCode === courseCode,
+        );
+
+        let newUnscheduled = [...unscheduled];
+        let newSemesters = semesters.map((sem) => [...sem]);
+
+        if (unschedIdx !== -1) {
+          // Move from unscheduled to the semester
+          const [slot] = newUnscheduled.splice(unschedIdx, 1);
+          newSemesters[semesterIndex].push(slot);
+        } else {
+          // Check if already somewhere in the grid; if so, move it
+          let existingSlot: Slot | undefined;
+          let fromIndex = -1;
+          let fromSlotIndex = -1;
+          for (let i = 0; i < semesters.length; i++) {
+            const idx = semesters[i].findIndex(
+              (s) => s.type === 'fixed' && s.courseCode === courseCode,
+            );
+            if (idx !== -1) {
+              existingSlot = semesters[i][idx];
+              fromIndex = i;
+              fromSlotIndex = idx;
+              break;
+            }
+          }
+
+          if (existingSlot && fromIndex !== -1) {
+            newSemesters[fromIndex].splice(fromSlotIndex, 1);
+            newSemesters[semesterIndex].push(existingSlot);
+          } else {
+            // Brand new course from catalog
+            const newSlot: Slot = {
+              id: uuidv4(),
+              type: 'fixed',
+              courseCode,
+              completed: false,
+            };
+            newSemesters[semesterIndex].push(newSlot);
+          }
+        }
+
+        const validityMap = revalidate(newSemesters, completedCodes, courseMap);
+        set({ semesters: newSemesters, unscheduled: newUnscheduled, validityMap });
+      },
+
+      resetPlan: async () => {
+        const { selectedDegree, degrees } = get();
+        if (!selectedDegree) return;
+        const entry = degrees.find((d) => d.degreeName === selectedDegree);
+        if (!entry) return;
+        try {
+          const plan = await loadDegreePlan(entry.planFile);
+          const semesters = planToSlots(plan);
+          const completedCodes = new Set<string>();
+          const { courseMap } = get();
+          const validityMap = revalidate(semesters, completedCodes, courseMap);
+          set({ degreePlan: plan, semesters, unscheduled: [], completedCodes, validityMap });
+        } catch (err) {
+          set({ loadError: String(err) });
+        }
+      },
+
+      rerunValidation: () => {
+        const { semesters, completedCodes, courseMap } = get();
+        const validityMap = revalidate(semesters, completedCodes, courseMap);
+        set({ validityMap });
+      },
+    }),
+    {
+      name: 'degree-planner-state',
+      storage: createJSONStorage(() => localStorage, {
+        // Custom reviver to restore Sets and Maps from JSON
+        reviver: (key, value) => {
+          if (key === 'completedCodes' && Array.isArray(value)) {
+            return new Set<string>(value as string[]);
+          }
+          return value;
+        },
+        // Custom replacer to serialize Sets
+        replacer: (key, value) => {
+          if (key === 'completedCodes' && value instanceof Set) {
+            return Array.from(value as Set<string>);
+          }
+          return value;
+        },
+      }),
+      // Only persist plan state — not the heavyweight catalog data
+      partialize: (state) => ({
+        selectedDegree: state.selectedDegree,
+        degreePlan: state.degreePlan,
+        semesters: state.semesters,
+        unscheduled: state.unscheduled,
+        completedCodes: state.completedCodes,
+      }),
+    },
+  ),
+);

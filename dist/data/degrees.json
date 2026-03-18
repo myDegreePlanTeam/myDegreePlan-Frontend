@@ -1,0 +1,20 @@
+{
+  "degrees": [
+    {
+      "degreeName": "Computer Science: No Concentration",
+      "planFile": "csc_core.json"
+    },
+    {
+      "degreeName": "Computer Science: Data Science and Artifical Intelligence Concentration",
+      "planFile": "csc_dsai.json"
+    },
+    {
+      "degreeName": "Computer Science: Cybersecurity Concentration",
+      "planFile": "csc_cybersecurity.json"
+    },
+    {
+      "degreeName": "Computer Science: High Performance Computing Concentration",
+      "planFile": "csc_hpc.json"
+    }
+  ]
+}

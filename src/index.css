@@ -1,0 +1,82 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Global resets & base styles ─────────────────────────────────────────── */
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+:root {
+  --scrollbar-track: #0d1528;
+  --scrollbar-thumb: #243660;
+  --scrollbar-thumb-hover: #3b82f6;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  @apply bg-navy-900 text-slate-100 font-sans antialiased;
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+/* Custom scrollbar styling */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: var(--scrollbar-track);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+}
+
+/* ── Glassmorphism card utility ─────────────────────────────────────────────*/
+.glass-card {
+  @apply bg-navy-700 bg-opacity-80 backdrop-blur-sm border border-navy-500 border-opacity-60;
+}
+
+.glass-card-raised {
+  @apply bg-navy-600 bg-opacity-90 backdrop-blur-md border border-navy-400 border-opacity-40;
+}
+
+/* ── Course tile status variants ─────────────────────────────────────────── */
+.tile-valid {
+  @apply border-navy-500 border-opacity-60 bg-navy-700;
+}
+
+.tile-invalid {
+  @apply border-red-500 border-opacity-80 bg-red-950 bg-opacity-30;
+}
+
+.tile-completed {
+  @apply border-emerald-500 border-opacity-60 bg-emerald-950 bg-opacity-30;
+}
+
+.tile-unfilled {
+  @apply border-dashed border-navy-400 border-opacity-50 bg-navy-800 bg-opacity-40;
+}
+
+/* ── Focus ring utility ──────────────────────────────────────────────────── */
+.focus-ring {
+  @apply focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-blue focus-visible:ring-offset-2 focus-visible:ring-offset-navy-900;
+}
+
+/* ── Transitions ─────────────────────────────────────────────────────────── */
+.transition-default {
+  @apply transition-all duration-150 ease-out;
+}
+
+/* ── Drag overlay ─────────────────────────────────────────────────────────── */
+.drag-overlay {
+  @apply opacity-95 scale-105 rotate-1 shadow-2xl shadow-accent-blue/20;
+  cursor: grabbing !important;
+}
