@@ -1,10 +1,15 @@
 /**
  * PrereqTooltip.tsx
- * Hover popover that shows a course's full description and prerequisite
- * satisfaction status for each prerequisite.
+ * Click-triggered info panel that shows a course's full description and
+ * prerequisite satisfaction status. Renders as a fixed-position portal
+ * to avoid z-index and overflow clipping issues.
+ *
+ * The panel is positioned adjacent to the triggering info icon, clamped
+ * within the viewport so it is always fully visible and readable.
  */
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { usePlanStore } from '../../store/planStore';
 import type { Course, ValidityResult } from '../../types';
 
@@ -18,43 +23,77 @@ export function PrereqTooltip({ courseCode, validity, children }: Props) {
   const courseMap = usePlanStore((s) => s.courseMap);
   const course: Course | undefined = courseMap.get(courseCode);
 
-  const [visible, setVisible] = useState(false);
+  const [open, setOpen] = useState(false);
   const [position, setPosition] = useState({ top: 0, left: 0 });
-  const triggerRef = useRef<HTMLDivElement>(null);
-  const tooltipRef = useRef<HTMLDivElement>(null);
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const iconRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
 
-  const showTooltip = () => {
-    timerRef.current = setTimeout(() => setVisible(true), 300);
-  };
+  const reposition = useCallback(() => {
+    if (!iconRef.current || !panelRef.current) return;
+    const iconRect = iconRef.current.getBoundingClientRect();
+    const panelEl = panelRef.current;
+    const panelWidth = panelEl.offsetWidth;
+    const panelHeight = panelEl.offsetHeight;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const pad = 8;
 
-  const hideTooltip = () => {
-    if (timerRef.current) clearTimeout(timerRef.current);
-    setVisible(false);
-  };
-
-  // Position the tooltip above or below the trigger based on available space
-  useEffect(() => {
-    if (visible && triggerRef.current && tooltipRef.current) {
-      const triggerRect = triggerRef.current.getBoundingClientRect();
-      const tooltipHeight = tooltipRef.current.offsetHeight;
-      const tooltipWidth = tooltipRef.current.offsetWidth;
-      const viewportHeight = window.innerHeight;
-      const viewportWidth = window.innerWidth;
-
-      let top = triggerRect.bottom + 8;
-      if (top + tooltipHeight > viewportHeight - 16) {
-        top = triggerRect.top - tooltipHeight - 8;
-      }
-
-      let left = triggerRect.left;
-      if (left + tooltipWidth > viewportWidth - 16) {
-        left = viewportWidth - tooltipWidth - 16;
-      }
-
-      setPosition({ top, left });
+    // Prefer placing to the right of the icon
+    let left = iconRect.right + pad;
+    if (left + panelWidth > vw - pad) {
+      // Fall back to placing left of the icon
+      left = iconRect.left - panelWidth - pad;
     }
-  }, [visible]);
+    // If still offscreen, center horizontally
+    if (left < pad) {
+      left = Math.max(pad, (vw - panelWidth) / 2);
+    }
+
+    // Vertically center on the icon, then clamp
+    let top = iconRect.top + iconRect.height / 2 - panelHeight / 2;
+    top = Math.max(pad, Math.min(top, vh - panelHeight - pad));
+
+    setPosition({ top, left });
+  }, []);
+
+  // Position the panel when it opens and on scroll/resize
+  useEffect(() => {
+    if (!open) return;
+    // Initial positioning after a frame so the panel has rendered
+    requestAnimationFrame(reposition);
+
+    window.addEventListener('scroll', reposition, true);
+    window.addEventListener('resize', reposition);
+    return () => {
+      window.removeEventListener('scroll', reposition, true);
+      window.removeEventListener('resize', reposition);
+    };
+  }, [open, reposition]);
+
+  // Close on click outside
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (
+        panelRef.current && !panelRef.current.contains(e.target as Node) &&
+        iconRef.current && !iconRef.current.contains(e.target as Node)
+      ) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [open]);
+
+  // Close on Escape
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('keydown', handler);
+    return () => document.removeEventListener('keydown', handler);
+  }, [open]);
 
   if (!course) return <>{children}</>;
 
@@ -64,23 +103,52 @@ export function PrereqTooltip({ courseCode, validity, children }: Props) {
   const missingPrereqsSet = new Set(validity?.missingPrereqs ?? []);
   const missingCoreqsSet = new Set(validity?.missingCoreqs ?? []);
 
+  const handleToggle = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    setOpen((v) => !v);
+  };
+
   return (
-    <div
-      ref={triggerRef}
-      onMouseEnter={showTooltip}
-      onMouseLeave={hideTooltip}
-      className="relative"
-    >
+    <div className="relative">
       {children}
 
-      {visible && (
+      {/* Always-visible info icon */}
+      <button
+        ref={iconRef}
+        onClick={handleToggle}
+        onPointerDown={(e) => e.stopPropagation()}
+        title="View course details"
+        className={`absolute -top-1 -right-1 p-0.5 rounded-full transition-all z-10 ${
+          open
+            ? 'bg-accent-blue text-white shadow-md'
+            : 'bg-navy-600 text-slate-400 hover:text-accent-blue hover:bg-navy-500'
+        }`}
+      >
+        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+        </svg>
+      </button>
+
+      {/* Portal-rendered info panel */}
+      {open && createPortal(
         <div
-          ref={tooltipRef}
+          ref={panelRef}
           style={{ top: position.top, left: position.left }}
-          className="fixed z-50 w-80 rounded-xl glass-card-raised shadow-2xl shadow-black/50 p-4 animate-fade-in pointer-events-none"
+          className="fixed z-[9999] w-80 rounded-xl bg-navy-700 border border-navy-400 border-opacity-60 shadow-2xl shadow-black/60 p-4 animate-fade-in"
         >
+          {/* Close button */}
+          <button
+            onClick={(e) => { e.stopPropagation(); setOpen(false); }}
+            className="absolute top-2 right-2 p-0.5 rounded text-slate-500 hover:text-slate-200 transition-colors"
+          >
+            <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+              <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
+            </svg>
+          </button>
+
           {/* Course header */}
-          <div className="mb-3">
+          <div className="mb-3 pr-5">
             <span className="font-mono text-xs text-accent-blue font-semibold tracking-wider">
               {course.code}
             </span>
@@ -92,7 +160,7 @@ export function PrereqTooltip({ courseCode, validity, children }: Props) {
 
           {/* Description */}
           {course.description && (
-            <p className="text-xs text-slate-400 leading-relaxed mb-3 max-h-24 overflow-y-auto">
+            <p className="text-xs text-slate-400 leading-relaxed mb-3 max-h-28 overflow-y-auto">
               {course.description}
             </p>
           )}
@@ -185,7 +253,8 @@ export function PrereqTooltip({ courseCode, validity, children }: Props) {
           {prereqs.length === 0 && coreqs.length === 0 && placements.length === 0 && (
             <p className="text-xs text-slate-500 italic">No prerequisites or corequisites required.</p>
           )}
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );

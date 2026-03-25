@@ -37,6 +37,20 @@ function getEffectiveCode(slot: Slot): string | null {
   }
 }
 
+/**
+ * Check if a course code is satisfied by the available set,
+ * accounting for known course aliases / equivalencies.
+ */
+function isCodeAvailable(code: string, available: Set<string>): boolean {
+  if (available.has(code)) return true;
+
+  // Known course aliases
+  if (code === 'COMM2025' && available.has('PC2500')) return true;
+  if (code === 'PC2500' && available.has('COMM2025')) return true;
+
+  return false;
+}
+
 // ─── Main Engine ──────────────────────────────────────────────────────────────
 
 /**
@@ -83,7 +97,7 @@ export function validatePlan(
         cumulativeCodes.add(code);
       }
     }
-    
+
     // Snapshot what's available IN OR BEFORE this semester for corequisites
     availableInOrBefore[semIndex] = new Set<string>(cumulativeCodes);
   }
@@ -102,21 +116,23 @@ export function validatePlan(
         continue;
       }
 
+      // Courses already marked completed should not show prereq warnings —
+      // the student has already passed, so prereq validation is moot.
+      if (slot.completed) {
+        validityMap.set(slot.id, { valid: true, missingPrereqs: [], missingCoreqs: [] });
+        continue;
+      }
+
       // Look up the course record. If not found in catalog, treat as no prereqs.
       const courseRecord: Course | undefined = courseMap.get(effectiveCode);
       const prereqs: string[] = courseRecord?.prerequisites ?? [];
+      const prereqGroups = courseRecord?.prerequisiteGroups ?? [];
       const coreqs: string[] = courseRecord?.corequisites ?? [];
       const placements = courseRecord?.placementRequirements ?? [];
 
-      // Determine which prerequisites are NOT satisfied
-      // Handle the PC2500 aliasing for COMM2025 explicitly here
-      let missingPrereqs: string[] = prereqs.filter((prereq) => {
-        if (prereq === 'COMM2025' && available.has('PC2500')) return false;
-        return !available.has(prereq);
-      });
-
-      // Check placement scores. If a placement requirement is present and met,
-      // it satisfies ALL prerequisites for that course (e.g. ACT Math 26 satisfies MATH1730).
+      // ── Check placement scores first ──────────────────────────────────
+      // If a placement requirement is met, it can bypass prerequisite checks
+      // (e.g. ACT Math 26 satisfies "MATH1730 or ACT Math 26").
       let hasValidPlacement = false;
       for (const p of placements) {
         if (p.type === 'ACT' && p.subject === 'Math' && placementScores.actMath && placementScores.actMath >= p.minimumScore) {
@@ -127,21 +143,34 @@ export function validatePlan(
           hasValidPlacement = true;
           break;
         }
-        // Add more placement logic as needed
       }
 
+      // ── Determine which prerequisites (AND-logic) are NOT satisfied ───
+      let missingPrereqs: string[];
       if (hasValidPlacement) {
-        // Only ignore 'missing' if the placement strictly overrides it.
-        // For our MVP, meeting *any* placement requirement bypasses the missing prerequisite list 
-        // because typical TTU course structure relies on "ACT Math 26 OR MATH 1730".
+        // Placement score bypasses the AND-prerequisites
         missingPrereqs = [];
+      } else {
+        missingPrereqs = prereqs.filter((prereq) => !isCodeAvailable(prereq, available));
       }
 
-      // Determine which corequisites are NOT satisfied
-      const missingCoreqs: string[] = coreqs.filter((coreq) => {
-        if (coreq === 'COMM2025' && availableInOrBefore[semIndex].has('PC2500')) return false;
-        return !availableInOrBefore[semIndex].has(coreq);
-      });
+      // ── Validate prerequisite groups (OR-logic) ───────────────────────
+      // Each group requires at least ONE of its courses to be available.
+      // If none in the group are available, report the group description as missing.
+      for (const group of prereqGroups) {
+        if (hasValidPlacement) break;
+        const groupSatisfied = group.courses.some((code) => isCodeAvailable(code, available));
+        if (!groupSatisfied) {
+          // Add a descriptive label or the first code as the "missing" indicator
+          const label = group.description ?? group.courses.join(' or ');
+          missingPrereqs.push(label);
+        }
+      }
+
+      // ── Determine which corequisites are NOT satisfied ────────────────
+      const missingCoreqs: string[] = coreqs.filter(
+        (coreq) => !isCodeAvailable(coreq, availableInOrBefore[semIndex])
+      );
 
       validityMap.set(slot.id, {
         valid: missingPrereqs.length === 0 && missingCoreqs.length === 0,
@@ -168,6 +197,15 @@ export function arePrerequsitesMet(
   courseMap: Map<string, Course>,
 ): boolean {
   const course = courseMap.get(courseCode);
-  const prereqs = course?.prerequisites ?? [];
-  return prereqs.every((p) => available.has(p));
+  if (!course) return true;
+
+  const prereqs = course.prerequisites ?? [];
+  const prereqGroups = course.prerequisiteGroups ?? [];
+
+  const andSatisfied = prereqs.every((p) => isCodeAvailable(p, available));
+  const orSatisfied = prereqGroups.every((group) =>
+    group.courses.some((code) => isCodeAvailable(code, available))
+  );
+
+  return andSatisfied && orSatisfied;
 }
