@@ -15,7 +15,18 @@
  * though they carry credit hours.
  */
 
-import type { Course, Slot, ValidityMap, ValidityResult, PlacementScores } from '../types';
+import type { Course, Slot, ValidityMap, ValidityResult, PlacementScores, TransferCourse, ExamCredit } from '../types';
+import { isSatisfiedByPlacementScores, isSatisfiedByExamCredit } from '../knowledge/academicRules';
+import { getEquivalentCourses, isOrLogicPrerequisite } from '../knowledge/equivalencies';
+
+export interface EngineContext {
+  semesters: Slot[][];
+  completedCodes: Set<string>;
+  courseMap: Map<string, Course>;
+  placementScores: PlacementScores;
+  transferCourses?: TransferCourse[];
+  examCredits?: ExamCredit[];
+}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -42,20 +53,13 @@ function getEffectiveCode(slot: Slot): string | null {
 /**
  * Validate all course placements in the 9-semester plan against prerequisite rules.
  *
- * @param semesters    - Array of 9 arrays of Slots (semesters[0] = Transfer)
- * @param completedCodes - Set of course codes the student has marked as completed
- * @param courseMap    - O(1) lookup map: code → Course from coursesFile.json
- * @param placementScores - Student placement scores
- * @returns ValidityMap — Map<slotId, { valid, missingPrereqs, missingCoreqs }>
+ * @param context - EngineContext containing semesters, completedCodes, courseMap, etc.
+ * @returns ValidityMap — Map<slotId, { valid, missingPrereqs, missingCoreqs, satisfactionDetails }>
  *
  * Complexity: O(S × C × P) where S = semesters, C = courses/semester, P = prereqs/course.
  */
-export function validatePlan(
-  semesters: Slot[][],
-  completedCodes: Set<string>,
-  courseMap: Map<string, Course>,
-  placementScores: PlacementScores,
-): ValidityMap {
+export function validatePlan(context: EngineContext): ValidityMap {
+  const { semesters, completedCodes, courseMap, placementScores, transferCourses = [], examCredits = [] } = context;
   const validityMap: ValidityMap = new Map<string, ValidityResult>();
 
   // Build the set of course codes that are "available" before each semester.
@@ -83,7 +87,7 @@ export function validatePlan(
         cumulativeCodes.add(code);
       }
     }
-    
+
     // Snapshot what's available IN OR BEFORE this semester for corequisites
     availableInOrBefore[semIndex] = new Set<string>(cumulativeCodes);
   }
@@ -104,49 +108,111 @@ export function validatePlan(
 
       // Look up the course record. If not found in catalog, treat as no prereqs.
       const courseRecord: Course | undefined = courseMap.get(effectiveCode);
-      const prereqs: string[] = courseRecord?.prerequisites ?? [];
+      let prereqs: string[] = courseRecord?.prerequisites ?? [];
       const coreqs: string[] = courseRecord?.corequisites ?? [];
       const placements = courseRecord?.placementRequirements ?? [];
+      let prereqGroups = [...(courseRecord?.prerequisiteGroups ?? [])];
 
-      // Determine which prerequisites are NOT satisfied
-      // Handle the PC2500 aliasing for COMM2025 explicitly here
-      let missingPrereqs: string[] = prereqs.filter((prereq) => {
-        if (prereq === 'COMM2025' && available.has('PC2500')) return false;
-        return !available.has(prereq);
-      });
-
-      // Check placement scores. If a placement requirement is present and met,
-      // it satisfies ALL prerequisites for that course (e.g. ACT Math 26 satisfies MATH1730).
-      let hasValidPlacement = false;
-      for (const p of placements) {
-        if (p.type === 'ACT' && p.subject === 'Math' && placementScores.actMath && placementScores.actMath >= p.minimumScore) {
-          hasValidPlacement = true;
-          break;
-        }
-        if (p.type === 'ACT' && p.subject === 'English' && placementScores.actEnglish && placementScores.actEnglish >= p.minimumScore) {
-          hasValidPlacement = true;
-          break;
-        }
-        // Add more placement logic as needed
+      // Bug #2 Fix: Convert legacy "A AND B" arrays into "A OR B" groups if description signifies OR-logic
+      if (prereqs.length > 1 && isOrLogicPrerequisite(courseRecord?.description)) {
+        prereqGroups.push({
+          type: 'OR',
+          courses: [...prereqs],
+          description: `One of: ${prereqs.join(', ')}`
+        });
+        prereqs = []; // Clear the original AND-list since it's now handled as an OR-group
       }
 
-      if (hasValidPlacement) {
-        // Only ignore 'missing' if the placement strictly overrides it.
-        // For our MVP, meeting *any* placement requirement bypasses the missing prerequisite list 
-        // because typical TTU course structure relies on "ACT Math 26 OR MATH 1730".
-        missingPrereqs = [];
+      // Determine which prerequisites are NOT satisfied
+      let missingPrereqs: string[] = [];
+      const satisfactionDetails: ValidityResult['satisfactionDetails'] = [];
+
+      // Helper to check a specific candidate course OR its equivalents
+      const evaluateCandidate = (candidate: string, forCoreq = false) => {
+        const codesToCheck = [candidate, ...getEquivalentCourses(candidate)];
+        for (const code of codesToCheck) {
+          const availSet = forCoreq ? availableInOrBefore[semIndex] : available;
+
+          if (availSet.has(code)) {
+            return { prereqCode: candidate, satisfiedBy: completedCodes.has(code) ? 'completed' : 'plan' } as const;
+          }
+
+          // Check placement scores via academic rules
+          const placementResult = isSatisfiedByPlacementScores(code, placementScores);
+          if (placementResult.satisfied && placementResult.matchedGate) {
+            return { prereqCode: candidate, satisfiedBy: placementResult.matchedGate.method } as const;
+          }
+
+          // Check Exam Credits via academic rules
+          for (const exam of examCredits) {
+            const result = isSatisfiedByExamCredit(code, exam.examType, exam.examName, exam.score);
+            if (result.satisfied && result.matchedGate) {
+              return { prereqCode: candidate, satisfiedBy: result.matchedGate.method } as const;
+            }
+          }
+
+          // Check Transfer Courses explicitly with equivalents
+          for (const tc of transferCourses) {
+            if (tc.equivalency === code || tc.code === code) {
+              return { prereqCode: candidate, satisfiedBy: 'transfer' } as const;
+            }
+          }
+        }
+        return null;
+      };
+
+      for (const prereq of prereqs) {
+        const satisfiedDetail = evaluateCandidate(prereq, false);
+        if (satisfiedDetail) {
+          satisfactionDetails.push(satisfiedDetail);
+        } else {
+          missingPrereqs.push(prereq);
+        }
+      }
+
+      // ── OR-logic prerequisite groups ──────────────────────────────────
+      // Each group is satisfied if ANY ONE course in the group is met.
+      for (const group of prereqGroups) {
+        let groupSatisfied = false;
+        let satisfiedByDetail: NonNullable<ValidityResult['satisfactionDetails']>[0] | undefined;
+
+        for (const candidate of group.courses) {
+          const detail = evaluateCandidate(candidate, false);
+          if (detail) {
+            satisfiedByDetail = detail;
+            groupSatisfied = true;
+            break;
+          }
+
+          // Fallback: check corequisite context for group candidates
+          const coreqDetail = evaluateCandidate(candidate, true);
+          if (coreqDetail && coreqDetail.satisfiedBy === 'plan') {
+            satisfiedByDetail = coreqDetail;
+            groupSatisfied = true;
+            break;
+          }
+        }
+
+        if (groupSatisfied && satisfiedByDetail) {
+          satisfactionDetails!.push(satisfiedByDetail);
+        } else {
+          // Report the group description or the list of courses as missing
+          const label = group.description || group.courses.join(' or ');
+          missingPrereqs.push(label);
+        }
       }
 
       // Determine which corequisites are NOT satisfied
       const missingCoreqs: string[] = coreqs.filter((coreq) => {
-        if (coreq === 'COMM2025' && availableInOrBefore[semIndex].has('PC2500')) return false;
-        return !availableInOrBefore[semIndex].has(coreq);
+        const coreqDetail = evaluateCandidate(coreq, true);
+        return !coreqDetail;
       });
 
       validityMap.set(slot.id, {
         valid: missingPrereqs.length === 0 && missingCoreqs.length === 0,
         missingPrereqs,
-        missingCoreqs
+        missingCoreqs,
+        satisfactionDetails
       });
     }
   }
@@ -169,5 +235,9 @@ export function arePrerequsitesMet(
 ): boolean {
   const course = courseMap.get(courseCode);
   const prereqs = course?.prerequisites ?? [];
-  return prereqs.every((p) => available.has(p));
+  return prereqs.every((p) => {
+    if (available.has(p)) return true;
+    const equivalents = getEquivalentCourses(p);
+    return equivalents.some(eq => available.has(eq));
+  });
 }
