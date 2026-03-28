@@ -45,6 +45,13 @@ export interface PlacementRequirement {
   description: string;
 }
 
+/** An OR-group prerequisite: any ONE course in the group satisfies it. */
+export interface PrerequisiteGroup {
+  type: 'OR';                // Currently only OR needed; AND is the default array behavior
+  courses: string[];         // Any ONE of these satisfies the group
+  description?: string;      // Optional human-readable label e.g. "Communications requirement"
+}
+
 /** A single course record from coursesFile.json */
 export interface Course {
   code: string;
@@ -53,8 +60,10 @@ export interface Course {
   name: string;
   credits: number;
   description: string;
-  /** Optional — treat missing as [] */
+  /** Optional — treat missing as []. All must be satisfied (AND logic). */
   prerequisites?: string[];
+  /** Optional OR-groups — each group requires ONE course to be satisfied. */
+  prerequisiteGroups?: PrerequisiteGroup[];
   corequisites?: string[];
   placementRequirements?: PlacementRequirement[];
 }
@@ -62,6 +71,55 @@ export interface Course {
 /** Root shape of coursesFile.json */
 export interface CoursesFile {
   courses: Course[];
+}
+
+// ─── Academic Rules Knowledge Layer Types ─────────────────────────────────────
+
+export type SatisfactionMethod =
+  | 'course'           // Standard TTU course completion
+  | 'transfer'         // Transfer course equivalency accepted
+  | 'ap'               // AP exam score
+  | 'ib'               // IB exam score
+  | 'clep'             // CLEP exam
+  | 'act'              // ACT sub-score threshold
+  | 'sat'              // SAT sub-score threshold
+  | 'math_placement'   // TTU math placement test result
+  | 'english_placement'// TTU English placement test result
+  | 'dual_enrollment'  // Dual enrollment / early college credit
+  | 'military'         // Military credit (ACE recommendations)
+  | 'dept_approval'    // Departmental permission / instructor approval
+  | 'waiver';          // Dean's waiver
+
+export interface PlacementGate {
+  method: SatisfactionMethod;
+  subject?: string;         // e.g. "Math", "English", "Reading"
+  minimumScore?: number;    // e.g. ACT Math >= 26, AP Calc score >= 3
+  examName?: string;        // e.g. "AP Calculus AB", "CLEP College Algebra"
+  placementLevel?: number;  // For internal placement test scales
+  description: string;      // Human-readable explanation shown in the UI
+}
+
+export interface CourseEquivalency {
+  ttuCourseCode: string;     // The TTU course this satisfies
+  institutionName: string;   // Sending institution name
+  institutionCode?: string;  // Optional FICE/OPEID code
+  externalCode: string;      // Course code at the sending institution
+  externalName: string;      // Course name at the sending institution
+  credits: number;
+  source: 'TTP' | 'ARTIC' | 'manual' | 'dept_approved';
+  notes?: string;
+}
+
+export interface AcademicRule {
+  courseCode: string;
+  satisfactionMethods: SatisfactionMethod[];
+  placementGates?: PlacementGate[];
+  minimumGrade?: string;          // e.g. "C" — some courses require C or better
+  notes?: string;                 // Policy notes shown to student
+  /** When true, placement satisfaction silently bypasses prerequisites
+   *  without adding a slot or credit to Prior Learning. Used for courses
+   *  like MATH1710/1720/1730 that are skipped (not earned) via ACT scores. */
+  bypassOnly?: boolean;
 }
 
 // ─── Slot / Tile Types ────────────────────────────────────────────────────────
@@ -90,10 +148,20 @@ export interface Slot {
   slotCredits?: number;
   /** Course code dragged into an elective slot (null = unfilled) */
   electiveCode?: string | null;
+  /** Remaining credits after partial fills (initialized from slotCredits) */
+  remainingCredits?: number;
+  /** Courses partially filling this elective slot */
+  electiveFills?: { courseCode: string; credits: number }[];
 
   // ── Status ──
   /** Whether the student has marked this course as completed */
   completed: boolean;
+
+  // ── Prior Learning Source ──
+  /** How this slot was added to the plan (undefined = user-placed or degree template) */
+  source?: 'placement' | 'transfer' | 'exam';
+  /** Human-readable label for the source (e.g., "ACT Math ≥ 27", "AP Calculus AB") */
+  sourceLabel?: string;
 }
 
 // ─── Validity / Engine Types ──────────────────────────────────────────────────
@@ -105,6 +173,22 @@ export interface ValidityResult {
   missingPrereqs: string[];
   /** List of corequisite course codes that are not satisfied */
   missingCoreqs: string[];
+  /** Prerequisites placed in the same semester (invalid but present in plan) */
+  sameSemesterPrereqs?: string[];
+  /** Detailed record of exactly how each prerequisite was fulfilled */
+  satisfactionDetails?: {
+    prereqCode: string;
+    satisfiedBy: SatisfactionMethod | 'plan' | 'completed';
+  }[];
+}
+
+/** A notification shown to the user about plan changes or warnings */
+export interface PlanNotification {
+  id: string;
+  type: 'info' | 'warning' | 'auto-move';
+  message: string;
+  createdAt: number;
+  courseCodes?: string[];
 }
 
 /** Map from slot.id → validity result, returned by the prerequisite engine */
@@ -130,6 +214,14 @@ export interface TransferCourse {
   equivalency?: string;
 }
 
+export interface ExamCredit {
+  examType: 'ap' | 'ib' | 'clep';
+  examName: string;
+  score: number;
+  ttuEquivalent: string[];
+  credits: number;
+}
+
 // ─── Application State ────────────────────────────────────────────────────────
 
 /** The application's global state shape (managed by Zustand) */
@@ -150,6 +242,8 @@ export interface AppState {
   placementScores: PlacementScores;
   /** Manually entered transfer courses */
   transferCourses: TransferCourse[];
+  /** AP/IB/CLEP Exam Credits */
+  examCredits: ExamCredit[];
   /** Prerequisite validity map, updated reactively after every plan mutation */
   validityMap: ValidityMap;
   /** O(1) lookup map built from coursesFile.json on startup */
@@ -160,4 +254,6 @@ export interface AppState {
   loaded: boolean;
   /** Error message if data loading failed */
   loadError: string | null;
+  /** User-facing notifications (auto-move cascades, warnings, etc.) */
+  notifications: PlanNotification[];
 }

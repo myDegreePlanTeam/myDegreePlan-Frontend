@@ -166,6 +166,15 @@ export function CourseTile({ slot, isOverlay = false }: Props) {
             )}
           </div>
         )}
+
+        {/* Same-semester conflict warning (distinct orange) */}
+        {validity?.sameSemesterPrereqs && validity.sameSemesterPrereqs.length > 0 && !slot.completed && (
+          <div className="mt-1.5 pt-1.5 border-t border-amber-700 border-opacity-50">
+            <p className="text-[9px] text-amber-400 leading-tight">
+              Same-semester conflict: {validity.sameSemesterPrereqs.join(', ')} must be taken earlier
+            </p>
+          </div>
+        )}
       </PrereqTooltip>
     </div>
   );
