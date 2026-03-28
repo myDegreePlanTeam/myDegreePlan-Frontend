@@ -32,8 +32,9 @@ import {
   loadDegreePlan,
   loadSubjectCodes,
 } from '../services/dataLoader';
-import { validatePlan } from '../services/prerequisiteEngine';
+import { validatePlan, computeCascadeMoves } from '../services/prerequisiteEngine';
 import { ACADEMIC_RULES, isSatisfiedByPlacementScores } from '../knowledge/academicRules';
+import { getSequencePartner, isStandalone } from '../knowledge/scienceSequences';
 
 // ── Plan Schema Version ───────────────────────────────────────────────────────
 const PLAN_VERSION = 3; // v3: bypassOnly placement courses no longer create slots/credits
@@ -167,6 +168,12 @@ interface PlanActions {
 
   /** Manually re-run validation (used after bulk state changes). */
   rerunValidation: () => void;
+
+  /** Add a notification to the stack. */
+  addNotification: (notification: PlanNotification) => void;
+
+  /** Dismiss a notification by ID. */
+  dismissNotification: (id: string) => void;
 }
 
 export interface MoveParams {
@@ -243,7 +250,7 @@ export const usePlanStore = create<FullStore>()(
       },
 
       moveSlot: ({ slotId, toSemesterIndex, toPosition }: MoveParams) => {
-        const { semesters, unscheduled, completedCodes, courseMap } = get();
+        const { semesters, unscheduled, completedCodes, courseMap, notifications } = get();
 
         // Find the slot in its current location
         let slot: Slot | undefined;
@@ -271,6 +278,31 @@ export const usePlanStore = create<FullStore>()(
 
         if (!slot) return; // slot not found — no-op
 
+        // Determine the effective course code for cascade analysis
+        let movedCode: string | null = null;
+        if (slot.type === 'fixed') movedCode = slot.courseCode ?? null;
+        else if (slot.type === 'options') movedCode = slot.selectedOption ?? null;
+        else if (slot.type === 'elective') movedCode = slot.electiveCode ?? null;
+
+        // ── Cascade check: only when moving to a LATER semester ──────────
+        let cascadeMoves: { slotId: string; courseCode: string; fromSemester: number; toSemester: number }[] = [];
+        if (movedCode && toSemesterIndex >= 1 && fromSemesterIndex >= 0 && toSemesterIndex > fromSemesterIndex) {
+          const cascade = computeCascadeMoves(movedCode, toSemesterIndex, semesters, courseMap);
+          if (cascade.blocked) {
+            // Reject the move and notify the user
+            const newNotification: PlanNotification = {
+              id: uuidv4(),
+              type: 'warning',
+              message: cascade.blockReason || `Cannot move ${movedCode} — would push courses beyond semester 8`,
+              createdAt: Date.now(),
+              courseCodes: [movedCode],
+            };
+            set({ notifications: [...notifications, newNotification] });
+            return;
+          }
+          cascadeMoves = cascade.moves;
+        }
+
         // Build new state arrays via immutable clones
         const newSemesters = semesters.map((sem) => [...sem]);
         let newUnscheduled = [...unscheduled];
@@ -292,8 +324,34 @@ export const usePlanStore = create<FullStore>()(
           dest.splice(clampedPos, 0, slot);
         }
 
+        // ── Apply cascade moves ──────────────────────────────────────────
+        for (const cm of cascadeMoves) {
+          // Find and remove from current position
+          for (let si = 0; si < newSemesters.length; si++) {
+            const idx = newSemesters[si].findIndex((s) => s.id === cm.slotId);
+            if (idx !== -1) {
+              const [movedSlot] = newSemesters[si].splice(idx, 1);
+              newSemesters[cm.toSemester].push(movedSlot);
+              break;
+            }
+          }
+        }
+
+        // Add notification for cascade moves
+        let newNotifications = [...notifications];
+        if (cascadeMoves.length > 0) {
+          const movedNames = cascadeMoves.map((m) => m.courseCode).join(', ');
+          newNotifications.push({
+            id: uuidv4(),
+            type: 'auto-move',
+            message: `Auto-moved ${movedNames} to maintain prerequisite ordering`,
+            createdAt: Date.now(),
+            courseCodes: cascadeMoves.map((m) => m.courseCode),
+          });
+        }
+
         const validityMap = revalidate(newSemesters, completedCodes, courseMap, get().placementScores);
-        set({ semesters: newSemesters, unscheduled: newUnscheduled, validityMap });
+        set({ semesters: newSemesters, unscheduled: newUnscheduled, validityMap, notifications: newNotifications });
       },
 
       toggleCompleted: (slotId: string) => {
@@ -328,31 +386,96 @@ export const usePlanStore = create<FullStore>()(
 
       fillChoice: (slotId: string, courseCode: string) => {
         const { semesters, completedCodes, courseMap } = get();
-        const newSemesters = semesters.map((sem) =>
+
+        // Find the slot being filled to check for Science Sequence linking
+        let filledSlot: Slot | undefined;
+        for (const sem of semesters) {
+          const s = sem.find((sl) => sl.id === slotId);
+          if (s) { filledSlot = s; break; }
+        }
+
+        let newSemesters = semesters.map((sem) =>
           sem.map((slot) =>
             slot.id === slotId && slot.type === 'options'
               ? { ...slot, selectedOption: courseCode }
               : slot,
           ),
         );
+
+        // ── Science Sequence auto-fill ───────────────────────────────────
+        if (filledSlot?.optionsName === 'Science Sequence' && !isStandalone(courseCode)) {
+          const partner = getSequencePartner(courseCode);
+          if (partner) {
+            // Find sibling Science Sequence slot (same optionsName, different id)
+            newSemesters = newSemesters.map((sem) =>
+              sem.map((slot) => {
+                if (
+                  slot.type === 'options' &&
+                  slot.optionsName === 'Science Sequence' &&
+                  slot.id !== slotId &&
+                  !slot.selectedOption // Only auto-fill if not already filled
+                ) {
+                  return { ...slot, selectedOption: partner };
+                }
+                return slot;
+              }),
+            );
+          }
+        }
+
         const validityMap = revalidate(newSemesters, completedCodes, courseMap, get().placementScores);
         set({ semesters: newSemesters, validityMap });
       },
 
       clearChoice: (slotId: string) => {
         const { semesters, completedCodes, courseMap } = get();
-        const newSemesters = semesters.map((sem) =>
+
+        // Find the slot being cleared to check for Science Sequence
+        let clearedSlot: Slot | undefined;
+        for (const sem of semesters) {
+          const s = sem.find((sl) => sl.id === slotId);
+          if (s) { clearedSlot = s; break; }
+        }
+
+        let newSemesters = semesters.map((sem) =>
           sem.map((slot) =>
             slot.id === slotId && slot.type === 'options'
               ? { ...slot, selectedOption: null, completed: false }
               : slot,
           ),
         );
-        // If the cleared slot's code was in completedCodes, remove it
+
+        // ── Science Sequence: also clear sibling ─────────────────────────
+        if (clearedSlot?.optionsName === 'Science Sequence') {
+          newSemesters = newSemesters.map((sem) =>
+            sem.map((slot) => {
+              if (
+                slot.type === 'options' &&
+                slot.optionsName === 'Science Sequence' &&
+                slot.id !== slotId
+              ) {
+                return { ...slot, selectedOption: null, completed: false };
+              }
+              return slot;
+            }),
+          );
+        }
+
+        // Remove cleared codes from completedCodes
         const newCompletedCodes = new Set<string>(completedCodes);
         for (const sem of semesters) {
           for (const slot of sem) {
             if (slot.id === slotId && slot.type === 'options' && slot.selectedOption) {
+              newCompletedCodes.delete(slot.selectedOption);
+            }
+            // Also clear sibling's completedCode if Science Sequence
+            if (
+              clearedSlot?.optionsName === 'Science Sequence' &&
+              slot.type === 'options' &&
+              slot.optionsName === 'Science Sequence' &&
+              slot.id !== slotId &&
+              slot.selectedOption
+            ) {
               newCompletedCodes.delete(slot.selectedOption);
             }
           }
@@ -362,35 +485,96 @@ export const usePlanStore = create<FullStore>()(
       },
 
       fillElective: (slotId: string, courseCode: string) => {
-        const { semesters, completedCodes, courseMap } = get();
-        const newSemesters = semesters.map((sem) =>
-          sem.map((slot) =>
-            slot.id === slotId && slot.type === 'elective'
-              ? { ...slot, electiveCode: courseCode }
-              : slot,
-          ),
-        );
+        const { semesters, completedCodes, courseMap, notifications } = get();
+        const course = courseMap.get(courseCode);
+        const courseCredits = course?.credits ?? 3;
+
+        // Find the elective slot and its semester index
+        let electiveSlot: Slot | undefined;
+        let electiveSemIndex = -1;
+        for (let si = 0; si < semesters.length; si++) {
+          const found = semesters[si].find((s) => s.id === slotId && s.type === 'elective');
+          if (found) { electiveSlot = found; electiveSemIndex = si; break; }
+        }
+        if (!electiveSlot || electiveSemIndex < 0) return;
+
+        const totalCredits = electiveSlot.slotCredits ?? 3;
+        const currentFills = electiveSlot.electiveFills ?? [];
+        const usedCredits = currentFills.reduce((sum, f) => sum + f.credits, 0);
+        const remaining = totalCredits - usedCredits;
+
+        // Check if course credits exceed remaining
+        if (courseCredits > remaining) {
+          const newNotification: PlanNotification = {
+            id: uuidv4(),
+            type: 'warning',
+            message: `${courseCode} (${courseCredits} cr) exceeds the remaining ${remaining} elective credits`,
+            createdAt: Date.now(),
+            courseCodes: [courseCode],
+          };
+          set({ notifications: [...notifications, newNotification] });
+          return;
+        }
+
+        const newFills = [...currentFills, { courseCode, credits: courseCredits }];
+        const newRemaining = remaining - courseCredits;
+
+        // Create a visible fixed slot for the selected course in the same semester
+        const newFixedSlot: Slot = {
+          id: uuidv4(),
+          type: 'fixed',
+          courseCode,
+          completed: false,
+        };
+
+        const newSemesters = semesters.map((sem, si) => {
+          if (si !== electiveSemIndex) return [...sem];
+          return sem.map((slot) => {
+            if (slot.id !== slotId) return slot;
+            return {
+              ...slot,
+              electiveFills: newFills,
+              remainingCredits: newRemaining,
+              // Mark fully filled when no credits remain
+              electiveCode: newRemaining === 0 ? 'FILLED' : slot.electiveCode,
+            };
+          }).concat([newFixedSlot]);
+        });
+
         const validityMap = revalidate(newSemesters, completedCodes, courseMap, get().placementScores);
         set({ semesters: newSemesters, validityMap });
       },
 
       clearElective: (slotId: string) => {
         const { semesters, completedCodes, courseMap } = get();
-        const newSemesters = semesters.map((sem) =>
-          sem.map((slot) =>
-            slot.id === slotId && slot.type === 'elective'
-              ? { ...slot, electiveCode: null, completed: false }
-              : slot,
-          ),
-        );
-        const newCompletedCodes = new Set<string>(completedCodes);
-        for (const sem of semesters) {
-          for (const slot of sem) {
-            if (slot.id === slotId && slot.type === 'elective' && slot.electiveCode) {
-              newCompletedCodes.delete(slot.electiveCode);
-            }
-          }
+
+        // Find the elective slot to get its fills
+        let electiveSlot: Slot | undefined;
+        let electiveSemIndex = -1;
+        for (let si = 0; si < semesters.length; si++) {
+          const found = semesters[si].find((s) => s.id === slotId && s.type === 'elective');
+          if (found) { electiveSlot = found; electiveSemIndex = si; break; }
         }
+
+        const fillCodes = new Set((electiveSlot?.electiveFills ?? []).map((f) => f.courseCode));
+
+        const newSemesters = semesters.map((sem, si) => {
+          let result = sem.map((slot) =>
+            slot.id === slotId && slot.type === 'elective'
+              ? { ...slot, electiveCode: null, electiveFills: [], remainingCredits: undefined, completed: false }
+              : slot,
+          );
+          // Remove fixed slots that were created for partial elective fills
+          if (si === electiveSemIndex && fillCodes.size > 0) {
+            result = result.filter((slot) => !(slot.type === 'fixed' && slot.courseCode && fillCodes.has(slot.courseCode)));
+          }
+          return result;
+        });
+
+        const newCompletedCodes = new Set<string>(completedCodes);
+        if (electiveSlot?.electiveCode) newCompletedCodes.delete(electiveSlot.electiveCode);
+        for (const code of fillCodes) newCompletedCodes.delete(code);
+
         const validityMap = revalidate(newSemesters, newCompletedCodes, courseMap, get().placementScores);
         set({ semesters: newSemesters, completedCodes: newCompletedCodes, validityMap });
       },
@@ -510,6 +694,18 @@ export const usePlanStore = create<FullStore>()(
         set({ validityMap });
       },
 
+      addNotification: (notification: PlanNotification) => {
+        set((state: FullStore) => ({
+          notifications: [...state.notifications, notification],
+        }));
+      },
+
+      dismissNotification: (id: string) => {
+        set((state: FullStore) => ({
+          notifications: state.notifications.filter((n) => n.id !== id),
+        }));
+      },
+
       addTransferCourse: (course: TransferCourse) => {
         const { semesters, completedCodes, courseMap, placementScores, transferCourses } = get();
 
@@ -610,19 +806,34 @@ export const usePlanStore = create<FullStore>()(
         const { semesters, completedCodes, courseMap, placementScores, transferCourses, examCredits } = get();
         const newExamCredits = [...examCredits, credit];
 
-        // Add equivalent courses to Semester 0 and completedCodes
-        const newSemesters = semesters.map((sem, idx) => (idx === 0 ? [...sem] : [...sem]));
+        // Add equivalent courses to Semester 0 and completedCodes.
+        // If the course already exists in a regular semester, remove it first.
+        const newSemesters = semesters.map((sem) => [...sem]);
         const newCompletedCodes = new Set<string>(completedCodes);
         for (const ttuCode of credit.ttuEquivalent) {
-          const slot: Slot = {
-            id: uuidv4(),
-            type: 'fixed',
-            courseCode: ttuCode,
-            completed: true,
-            source: 'exam',
-            sourceLabel: `${credit.examType.toUpperCase()} ${credit.examName}`,
-          };
-          newSemesters[0].push(slot);
+          // Remove from regular semesters (1-8) if already placed
+          for (let si = 1; si < newSemesters.length; si++) {
+            const idx = newSemesters[si].findIndex(
+              (s) => s.type === 'fixed' && s.courseCode === ttuCode
+            );
+            if (idx !== -1) {
+              newSemesters[si].splice(idx, 1);
+            }
+          }
+
+          // Don't duplicate if already in Semester 0
+          const alreadyInSem0 = newSemesters[0].some((s) => s.courseCode === ttuCode);
+          if (!alreadyInSem0) {
+            const slot: Slot = {
+              id: uuidv4(),
+              type: 'fixed',
+              courseCode: ttuCode,
+              completed: true,
+              source: 'exam',
+              sourceLabel: `EXAM CREDIT -- ${credit.examType.toUpperCase()} ${credit.examName}`,
+            };
+            newSemesters[0].push(slot);
+          }
           newCompletedCodes.add(ttuCode);
         }
 

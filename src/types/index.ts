@@ -148,6 +148,10 @@ export interface Slot {
   slotCredits?: number;
   /** Course code dragged into an elective slot (null = unfilled) */
   electiveCode?: string | null;
+  /** Remaining credits after partial fills (initialized from slotCredits) */
+  remainingCredits?: number;
+  /** Courses partially filling this elective slot */
+  electiveFills?: { courseCode: string; credits: number }[];
 
   // ── Status ──
   /** Whether the student has marked this course as completed */

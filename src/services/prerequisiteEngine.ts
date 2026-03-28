@@ -208,10 +208,22 @@ export function validatePlan(context: EngineContext): ValidityMap {
         return !coreqDetail;
       });
 
+      // Detect same-semester prerequisites: prereqs that are in the same semester
+      // but not in an earlier one (availableInOrBefore has them, availableBefore doesn't)
+      const sameSemesterPrereqs: string[] = [];
+      for (const prereq of missingPrereqs) {
+        // Check if this missing prereq is actually in the same semester
+        const inOrBefore = availableInOrBefore[semIndex];
+        if (inOrBefore.has(prereq)) {
+          sameSemesterPrereqs.push(prereq);
+        }
+      }
+
       validityMap.set(slot.id, {
         valid: missingPrereqs.length === 0 && missingCoreqs.length === 0,
         missingPrereqs,
         missingCoreqs,
+        sameSemesterPrereqs: sameSemesterPrereqs.length > 0 ? sameSemesterPrereqs : undefined,
         satisfactionDetails
       });
     }
@@ -219,6 +231,141 @@ export function validatePlan(context: EngineContext): ValidityMap {
 
   return validityMap;
 }
+
+// ─── Chain Analysis Helpers ───────────────────────────────────────────────────
+
+/**
+ * Reverse-dependency lookup: find all courses in the catalog that list
+ * `courseCode` as a direct prerequisite (AND-list or OR-group member).
+ */
+export function getPostrequisites(
+  courseCode: string,
+  courseMap: Map<string, Course>,
+): string[] {
+  const result: string[] = [];
+  for (const [code, course] of courseMap) {
+    const prereqs = course.prerequisites ?? [];
+    const groups = course.prerequisiteGroups ?? [];
+    if (prereqs.includes(courseCode)) {
+      result.push(code);
+    } else if (groups.some((g) => g.courses.includes(courseCode))) {
+      result.push(code);
+    }
+  }
+  return result;
+}
+
+/**
+ * Transitive closure of all downstream postrequisites (BFS).
+ * Returns codes in topological order (closest dependents first).
+ */
+export function getDependencyChain(
+  courseCode: string,
+  courseMap: Map<string, Course>,
+): string[] {
+  const visited = new Set<string>();
+  const chain: string[] = [];
+  const queue = [courseCode];
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    const postReqs = getPostrequisites(current, courseMap);
+    for (const pr of postReqs) {
+      if (!visited.has(pr)) {
+        visited.add(pr);
+        chain.push(pr);
+        queue.push(pr);
+      }
+    }
+  }
+  return chain;
+}
+
+export interface CascadeMove {
+  slotId: string;
+  courseCode: string;
+  fromSemester: number;
+  toSemester: number;
+}
+
+export interface CascadeResult {
+  moves: CascadeMove[];
+  blocked: boolean;
+  blockReason?: string;
+}
+
+/**
+ * Compute which slots must cascade forward when a course is moved to a later semester.
+ * Only cascades when moving LATER (moving earlier doesn't invalidate dependents).
+ */
+export function computeCascadeMoves(
+  movedCourseCode: string,
+  toSemesterIndex: number,
+  semesters: Slot[][],
+  courseMap: Map<string, Course>,
+): CascadeResult {
+  const moves: CascadeMove[] = [];
+  const chain = getDependencyChain(movedCourseCode, courseMap);
+
+  // Build a map of courseCode → { slotId, semesterIndex } for quick lookup
+  const codeToLocation = new Map<string, { slotId: string; semIndex: number }>();
+  for (let si = 0; si < semesters.length; si++) {
+    for (const slot of semesters[si]) {
+      const code = getEffectiveCode(slot);
+      if (code) codeToLocation.set(code, { slotId: slot.id, semIndex: si });
+    }
+  }
+
+  // Track the effective minimum semester for each cascaded course
+  const minSemester = new Map<string, number>();
+  minSemester.set(movedCourseCode, toSemesterIndex);
+
+  for (const depCode of chain) {
+    const loc = codeToLocation.get(depCode);
+    if (!loc) continue; // not in the current plan
+
+    // Find the latest semester of any of this course's prerequisites
+    const depCourse = courseMap.get(depCode);
+    const depPrereqs = depCourse?.prerequisites ?? [];
+    const depGroups = depCourse?.prerequisiteGroups ?? [];
+    const allPrereqCodes = [...depPrereqs, ...depGroups.flatMap((g) => g.courses)];
+
+    let latestPrereqSem = -1;
+    for (const pCode of allPrereqCodes) {
+      const pMin = minSemester.get(pCode);
+      if (pMin !== undefined && pMin > latestPrereqSem) latestPrereqSem = pMin;
+      const pLoc = codeToLocation.get(pCode);
+      if (pLoc && pLoc.semIndex > latestPrereqSem) latestPrereqSem = pLoc.semIndex;
+    }
+
+    // If this course is in a semester <= latestPrereqSem, it needs to move
+    if (latestPrereqSem >= 0 && loc.semIndex <= latestPrereqSem) {
+      const newSem = latestPrereqSem + 1;
+      if (newSem > 8) {
+        return {
+          moves,
+          blocked: true,
+          blockReason: `Moving ${movedCourseCode} would push ${depCode} beyond semester 8`,
+        };
+      }
+      moves.push({
+        slotId: loc.slotId,
+        courseCode: depCode,
+        fromSemester: loc.semIndex,
+        toSemester: newSem,
+      });
+      minSemester.set(depCode, newSem);
+      // Update location for subsequent dependency checks
+      codeToLocation.set(depCode, { slotId: loc.slotId, semIndex: newSem });
+    } else {
+      // No move needed, but record its position for downstream checks
+      minSemester.set(depCode, loc.semIndex);
+    }
+  }
+
+  return { moves, blocked: false };
+}
+
+// ─── Convenience ──────────────────────────────────────────────────────────────
 
 /**
  * Convenience: check if a single course code has all its prerequisites
