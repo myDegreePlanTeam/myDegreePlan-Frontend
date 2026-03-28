@@ -21,6 +21,11 @@ export function slotCredits(slot: Slot, courseMap: Map<string, Course>): number 
     if (!code) return 0;
     return courseMap.get(code)?.credits ?? 0;
   }
+  if (slot.type === 'elective' && slot.electiveFills && slot.electiveFills.length > 0) {
+    // For partially filled electives, report the used credits (capped at slotCredits)
+    const used = slot.electiveFills.reduce((sum, f) => sum + f.credits, 0);
+    return Math.min(used, slot.slotCredits ?? 0);
+  }
   // options and elective slots carry their credit value in slotCredits
   return slot.slotCredits ?? 0;
 }

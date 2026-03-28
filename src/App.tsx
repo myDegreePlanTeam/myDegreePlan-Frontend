@@ -28,6 +28,7 @@ import { Sidebar } from './components/Sidebar/Sidebar';
 import { StatusBar } from './components/StatusBar/StatusBar';
 import { CourseTile } from './components/CourseTile/CourseTile';
 import { OptionsSlot, ElectiveSlot } from './components/SlotTile/SlotTile';
+import { NotificationToasts } from './components/Notifications/NotificationToast';
 import type { Slot } from './types';
 
 // ─── Drag Overlay Renderer ────────────────────────────────────────────────────
@@ -324,6 +325,9 @@ export default function App() {
       <DragOverlay>
         <DragOverlayContent activeSlot={activeSlot} />
       </DragOverlay>
+
+      {/* Notifications */}
+      <NotificationToasts />
 
       {/* Confirmation Modal */}
       {confirm && (
